@@ -1,0 +1,150 @@
+/* Classic Snake Game - Retro Styling */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Courier New", monospace;
+  background-color: #1a1a1a;
+  color: #00ff00;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  max-width: 500px;
+}
+
+/* Score Display */
+.score-display {
+  text-align: center;
+  width: 100%;
+}
+
+.score-display h1 {
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+  text-shadow: 0 0 10px #00ff00;
+  letter-spacing: 3px;
+}
+
+.score-display p {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+#score {
+  color: #ffff00;
+  text-shadow: 0 0 8px #ffff00;
+}
+
+/* Canvas Styling */
+#game-canvas {
+  border: 3px solid #00ff00;
+  box-shadow:
+    0 0 20px rgba(0, 255, 0, 0.5),
+    inset 0 0 20px rgba(0, 255, 0, 0.1);
+  background-color: #0d0d0d;
+  display: block;
+}
+
+/* Game Over Overlay */
+.game-over {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: rgba(0, 0, 0, 0.95);
+  border: 3px solid #ff0000;
+  box-shadow: 0 0 30px rgba(255, 0, 0, 0.7);
+  padding: 40px;
+  text-align: center;
+  z-index: 1000;
+  min-width: 300px;
+}
+
+.game-over h2 {
+  color: #ff0000;
+  font-size: 2rem;
+  margin-bottom: 20px;
+  text-shadow: 0 0 10px #ff0000;
+}
+
+.game-over p {
+  font-size: 1.3rem;
+  margin-bottom: 25px;
+}
+
+#final-score {
+  color: #ffff00;
+  font-size: 1.8rem;
+  text-shadow: 0 0 8px #ffff00;
+}
+
+.game-over.hidden {
+  display: none;
+}
+
+/* Restart Button */
+#restart-button {
+  font-family: "Courier New", monospace;
+  font-size: 1.2rem;
+  padding: 12px 30px;
+  background-color: #00ff00;
+  color: #000;
+  border: 2px solid #00ff00;
+  cursor: pointer;
+  font-weight: bold;
+  text-transform: uppercase;
+  transition: all 0.3s ease;
+}
+
+#restart-button:hover {
+  background-color: #000;
+  color: #00ff00;
+  box-shadow: 0 0 15px #00ff00;
+}
+
+#restart-button:active {
+  transform: scale(0.95);
+}
+
+/* Instructions */
+.instructions {
+  text-align: center;
+  font-size: 1rem;
+  line-height: 1.8;
+  opacity: 0.8;
+}
+
+.instructions p {
+  margin: 5px 0;
+}
+
+/* Responsive Design */
+@media (max-width: 480px) {
+  .score-display h1 {
+    font-size: 1.8rem;
+  }
+
+  #game-canvas {
+    width: 100%;
+    max-width: 400px;
+    height: auto;
+  }
+
+  .game-over {
+    padding: 30px 20px;
+    min-width: 250px;
+  }
+}

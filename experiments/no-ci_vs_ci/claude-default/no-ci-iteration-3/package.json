@@ -1,0 +1,12 @@
+{
+  "name": "snake-game",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "test:run": "node scripts/run-with-timeout.mjs vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0"
+  }
+}

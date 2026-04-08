@@ -1,0 +1,30 @@
+{
+  "runner": "claude",
+  "buildAgent": {
+    "timeoutMinutes": 10,
+    "verbose": true
+  },
+  "git": {
+    "autoPush": true,
+    "pushOnLocalSuccess": true,
+    "baseBranch": "current"
+  },
+  "ci": {
+    "enabled": true,
+    "provider": "circleci",
+    "waitForCI": true,
+    "requireGreenBeforeComplete": true,
+    "approvalGateEnabled": false,
+    "branchStrategy": "feature-branch",
+    "doctor": {
+      "enabled": true,
+      "maxLogLength": 0
+    }
+  },
+  "reviewGate": {
+    "enabled": true,
+    "testTimeoutSeconds": 60,
+    "lintFixEnabled": true,
+    "testsEnabled": true
+  }
+}

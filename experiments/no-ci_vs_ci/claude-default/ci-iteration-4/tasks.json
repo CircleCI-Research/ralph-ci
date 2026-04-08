@@ -1,0 +1,112 @@
+[
+  {
+    "category": "setup",
+    "description": "Create basic HTML structure and implement createInitialSnake",
+    "steps": [
+      "Create src/index.html with HTML5 boilerplate",
+      "Add canvas element for the game",
+      "Add score display area",
+      "Add game over / restart UI elements",
+      "Link CSS and JS files (type='module' for ES imports)",
+      "Implement createInitialSnake() to pass its test",
+      "Run pnpm test to verify createInitialSnake tests pass",
+      "Verify: Open src/index.html in browser shows canvas"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "styling",
+    "description": "Style the game with retro aesthetic",
+    "steps": [
+      "Create src/style.css",
+      "Center the game on page",
+      "Style the canvas with border",
+      "Style score display",
+      "Style game over overlay",
+      "Add dark background for retro feel",
+      "Verify: Game looks clean and centered"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "testing",
+    "description": "Set up test infrastructure and write initial failing tests",
+    "steps": [
+      "Create src/game.test.ts with vitest imports",
+      "Write failing test for createInitialSnake() function",
+      "Write failing test for moveSnake() function",
+      "Write failing test for checkWallCollision() function",
+      "Write failing test for checkSelfCollision() function",
+      "Create src/game.js with empty exported function stubs that fail tests",
+      "Run pnpm test to verify tests exist and fail as expected",
+      "Verify: pnpm test shows failing tests (this is expected)"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "core",
+    "description": "Implement snake movement and rendering",
+    "steps": [
+      "Implement moveSnake() function to pass its tests",
+      "Implement getNewDirection() to prevent 180-degree turns",
+      "Add test for getNewDirection() and make it pass",
+      "Draw snake on canvas",
+      "Implement continuous movement with game loop",
+      "Add arrow key controls to change direction",
+      "Run pnpm test to verify movement tests pass",
+      "Verify: Snake moves and responds to arrow keys"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "core",
+    "description": "Implement food spawning and collision detection",
+    "steps": [
+      "Implement checkWallCollision() to pass its tests",
+      "Implement checkSelfCollision() to pass its tests",
+      "Add test for checkFoodCollision() and implement it",
+      "Add test for spawnFood() and implement it",
+      "Draw food on canvas (different color)",
+      "Grow snake when food is eaten",
+      "Spawn new food after eating (not on snake)",
+      "Run pnpm test to verify all collision tests pass",
+      "Verify: Snake grows when eating food"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "core",
+    "description": "Implement game over logic",
+    "steps": [
+      "Wire up collision detection in game loop",
+      "Stop game loop on collision",
+      "Display game over screen with final score",
+      "Update score when eating food",
+      "Run pnpm test to verify all tests still pass",
+      "Verify: Game ends on collision, shows score"
+    ],
+    "passes": true,
+    "ciVerified": false
+  },
+  {
+    "category": "polish",
+    "description": "Add restart functionality and final polish",
+    "steps": [
+      "Add restart button to game over screen",
+      "Reset snake position and length",
+      "Reset score to zero",
+      "Clear and restart game loop",
+      "Add 'Press SPACE to start' initial state",
+      "Create src/README.md with instructions",
+      "Run pnpm test to verify all tests pass",
+      "Verify: Full game loop works - play, die, restart"
+    ],
+    "passes": true,
+    "ciVerified": false
+  }
+]

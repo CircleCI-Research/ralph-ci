@@ -1,0 +1,101 @@
+{
+  "startTime": "2026-02-10T15:12:35.370Z",
+  "endTime": "2026-02-10T15:27:45.516Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-02-10T15:15:40.536Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Create basic HTML structure and implement createInitialSnake",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 10504,
+      "costUsd": 0.9384170000000002,
+      "durationMs": 185128
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-02-10T15:16:29.786Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Style the game with retro aesthetic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 1707,
+      "costUsd": 0.21862375000000006,
+      "durationMs": 43120
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-02-10T15:18:20.469Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Set up test infrastructure and write initial failing tests",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 6242,
+      "costUsd": 0.555774,
+      "durationMs": 109723
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-02-10T15:21:18.391Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement snake movement and rendering",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 9275,
+      "costUsd": 0.8382907499999999,
+      "durationMs": 176958
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-02-10T15:24:33.988Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement food spawning and collision detection",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 12007,
+      "costUsd": 1.0369940000000002,
+      "durationMs": 194571
+    },
+    {
+      "iteration": 6,
+      "timestamp": "2026-02-10T15:25:36.286Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement game over logic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 2268,
+      "costUsd": 0.2811225,
+      "durationMs": 61399
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-02-10T15:27:44.482Z",
+      "ciStatusAtStart": "queried-by-agent",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Add restart functionality and final polish",
+      "ciFailureFixed": false,
+      "outcome": "COMPLETE",
+      "tokensUsed": 6087,
+      "costUsd": 0.6731602499999998,
+      "durationMs": 127091
+    }
+  ],
+  "summary": {
+    "totalIterations": 7,
+    "totalTokens": 48090,
+    "totalCost": 4.54238225,
+    "ciQueriesTotal": 7,
+    "ciFailuresEncountered": 0,
+    "ciFailuresFixed": 0,
+    "tasksCompleted": 7,
+    "timeToFirstCIGreen": null,
+    "totalDurationMs": 910146
+  }
+}

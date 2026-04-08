@@ -1,0 +1,59 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@6.3
+
+jobs:
+  lint:
+    docker:
+      - image: cimg/node:20.18
+    resource_class: medium
+    steps:
+      - checkout
+      - node/install-packages:
+          pkg-manager: pnpm
+          cache-version: v1
+      - run:
+          name: Lint
+          command: pnpm lint
+
+  test:
+    docker:
+      - image: cimg/node:20.18
+    resource_class: medium
+    steps:
+      - checkout
+      - node/install-packages:
+          pkg-manager: pnpm
+          cache-version: v1
+      - run:
+          name: Test
+          command: pnpm test:run --reporter=junit --outputFile=test-results/junit.xml
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+          destination: test-results
+
+  build:
+    docker:
+      - image: cimg/node:20.18
+    resource_class: medium
+    steps:
+      - checkout
+      - node/install-packages:
+          pkg-manager: pnpm
+          cache-version: v1
+      - run:
+          name: Build
+          command: pnpm build
+
+workflows:
+  ci-workflow:
+    jobs:
+      - lint
+      - test
+      - build:
+          requires:
+            - lint
+            - test

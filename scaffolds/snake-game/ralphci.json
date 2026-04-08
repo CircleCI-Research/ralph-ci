@@ -1,0 +1,15 @@
+{
+  "runner": "claude",
+  "git": {
+    "autoPush": false,
+    "pushOnLocalSuccess": false
+  },
+  "ci": {
+    "enabled": false,
+    "provider": "circleci",
+    "waitForCI": false,
+    "requireGreenBeforeComplete": false,
+    "approvalGateEnabled": false,
+    "branchStrategy": "feature-branch"
+  }
+}

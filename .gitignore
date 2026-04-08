@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.cache/
+*.log
+!experiments/**/terminal_output.log
+.DS_Store
+.pnpm-store/
+.claude/
+features/
+.env
+.env.*
+test-results/

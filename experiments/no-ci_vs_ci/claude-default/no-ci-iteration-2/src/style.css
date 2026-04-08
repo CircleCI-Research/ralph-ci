@@ -1,0 +1,206 @@
+/* Reset and base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Courier New", monospace;
+  background-color: #1a1a1a;
+  color: #00ff00;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+/* Game container - centers everything */
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 30px;
+  background-color: #0a0a0a;
+  border: 3px solid #00ff00;
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+}
+
+/* Score display */
+.score-display {
+  font-size: 24px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-shadow: 0 0 10px rgba(0, 255, 0, 0.8);
+}
+
+#score {
+  color: #00ff00;
+  font-size: 28px;
+}
+
+/* Canvas styling */
+#gameCanvas {
+  border: 4px solid #00ff00;
+  background-color: #000000;
+  box-shadow:
+    inset 0 0 20px rgba(0, 255, 0, 0.2),
+    0 0 30px rgba(0, 255, 0, 0.4);
+  display: block;
+}
+
+/* Start message overlay */
+.start-message-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 999;
+}
+
+.start-message-content {
+  text-align: center;
+  padding: 40px;
+  background-color: #0a0a0a;
+  border: 3px solid #00ff00;
+  border-radius: 10px;
+  box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+}
+
+.start-message-content h2 {
+  font-size: 36px;
+  margin-bottom: 15px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  text-shadow: 0 0 15px rgba(0, 255, 0, 0.8);
+  animation: pulse 2s infinite;
+}
+
+.start-message-content p {
+  font-size: 18px;
+  letter-spacing: 1px;
+  opacity: 0.8;
+}
+
+/* Game over overlay */
+.game-over-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.9);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.game-over-content {
+  text-align: center;
+  padding: 40px;
+  background-color: #0a0a0a;
+  border: 3px solid #00ff00;
+  border-radius: 10px;
+  box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+}
+
+.game-over-content h2 {
+  font-size: 48px;
+  margin-bottom: 20px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  text-shadow: 0 0 15px rgba(0, 255, 0, 0.8);
+  animation: pulse 1.5s infinite;
+}
+
+.game-over-content p {
+  font-size: 24px;
+  margin-bottom: 30px;
+  letter-spacing: 2px;
+}
+
+#finalScore {
+  color: #00ff00;
+  font-size: 32px;
+  font-weight: bold;
+}
+
+/* Restart button */
+#restartButton {
+  font-family: "Courier New", monospace;
+  font-size: 20px;
+  font-weight: bold;
+  color: #00ff00;
+  background-color: transparent;
+  border: 2px solid #00ff00;
+  padding: 15px 40px;
+  text-transform: uppercase;
+  cursor: pointer;
+  letter-spacing: 2px;
+  transition: all 0.3s ease;
+  border-radius: 5px;
+}
+
+#restartButton:hover {
+  background-color: #00ff00;
+  color: #000000;
+  box-shadow: 0 0 20px rgba(0, 255, 0, 0.8);
+  transform: scale(1.05);
+}
+
+#restartButton:active {
+  transform: scale(0.98);
+}
+
+/* Pulse animation for game over text */
+@keyframes pulse {
+  0%,
+  100% {
+    text-shadow: 0 0 15px rgba(0, 255, 0, 0.8);
+  }
+  50% {
+    text-shadow: 0 0 25px rgba(0, 255, 0, 1);
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 500px) {
+  .game-container {
+    padding: 20px;
+  }
+
+  .score-display {
+    font-size: 18px;
+  }
+
+  #score {
+    font-size: 22px;
+  }
+
+  #gameCanvas {
+    width: 100%;
+    height: auto;
+  }
+
+  .game-over-content h2 {
+    font-size: 36px;
+  }
+
+  .game-over-content p {
+    font-size: 20px;
+  }
+
+  #finalScore {
+    font-size: 26px;
+  }
+}

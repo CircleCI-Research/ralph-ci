@@ -1,0 +1,17 @@
+{
+  "uniqueId": "1.0.0",
+  "runner": "claude",
+  "model": "claude-opus-4-6",
+  "git": {
+    "autoPush": true,
+    "pushOnLocalSuccess": true
+  },
+  "ci": {
+    "enabled": true,
+    "provider": "circleci",
+    "waitForCI": true,
+    "requireGreenBeforeComplete": true,
+    "approvalGateEnabled": false,
+    "branchStrategy": "feature-branch"
+  }
+}

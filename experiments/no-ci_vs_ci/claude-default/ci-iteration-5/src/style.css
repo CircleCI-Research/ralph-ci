@@ -1,0 +1,128 @@
+/* Retro-styled Snake Game CSS */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Courier New", monospace;
+  background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #00ff41;
+}
+
+.game-container {
+  text-align: center;
+  padding: 20px;
+  max-width: 600px;
+}
+
+.score-container {
+  margin-bottom: 20px;
+}
+
+.score-container h1 {
+  font-size: 2.5rem;
+  color: #00ff41;
+  text-shadow:
+    0 0 10px #00ff41,
+    0 0 20px #00ff41;
+  margin-bottom: 10px;
+  letter-spacing: 3px;
+}
+
+.score {
+  font-size: 1.5rem;
+  color: #00ff41;
+  text-shadow: 0 0 5px #00ff41;
+  font-weight: bold;
+}
+
+canvas {
+  border: 4px solid #00ff41;
+  display: block;
+  margin: 0 auto;
+  background: #0a0a15;
+  box-shadow:
+    0 0 20px rgba(0, 255, 65, 0.5),
+    0 0 40px rgba(0, 255, 65, 0.3),
+    inset 0 0 20px rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+}
+
+.hidden {
+  display: none;
+}
+
+.game-over {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(10, 10, 21, 0.95);
+  border: 3px solid #00ff41;
+  border-radius: 10px;
+  padding: 40px 60px;
+  box-shadow:
+    0 0 30px rgba(0, 255, 65, 0.6),
+    0 0 60px rgba(0, 255, 65, 0.4);
+  z-index: 1000;
+}
+
+.game-over h2 {
+  font-size: 3rem;
+  color: #ff0055;
+  text-shadow:
+    0 0 10px #ff0055,
+    0 0 20px #ff0055;
+  margin-bottom: 20px;
+  letter-spacing: 2px;
+}
+
+.game-over p {
+  font-size: 1.5rem;
+  color: #00ff41;
+  margin-bottom: 30px;
+}
+
+button {
+  padding: 15px 30px;
+  font-size: 1.2rem;
+  font-family: "Courier New", monospace;
+  cursor: pointer;
+  background: transparent;
+  color: #00ff41;
+  border: 2px solid #00ff41;
+  border-radius: 5px;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-weight: bold;
+}
+
+button:hover {
+  background: #00ff41;
+  color: #0a0a15;
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.8);
+  transform: scale(1.05);
+}
+
+button:active {
+  transform: scale(0.95);
+}
+
+.instructions {
+  margin-top: 30px;
+  font-size: 1rem;
+  color: #00ff41;
+  opacity: 0.8;
+}
+
+.instructions p {
+  margin: 5px 0;
+  text-shadow: 0 0 3px #00ff41;
+}

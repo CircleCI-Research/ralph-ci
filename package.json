@@ -1,0 +1,55 @@
+{
+  "name": "ralphci",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "RalphCI - CI-aware AI coding loops that ship with confidence",
+  "main": "dist/index.js",
+  "bin": {
+    "ralphci": "bin/ralphci"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "test:run": "node scripts/run-with-timeout.mjs 30 vitest run",
+    "dev": "tsx src/index.ts",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "lint": "eslint \"**/*.ts\" --no-error-on-unmatched-pattern",
+    "lint:fix": "eslint \"**/*.ts\" --fix --no-error-on-unmatched-pattern"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CircleCI-Research/ralph-ci.git"
+  },
+  "keywords": [
+    "circleci",
+    "ai",
+    "claude",
+    "ci",
+    "automation",
+    "coding-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/CircleCI-Research/ralph-ci/issues"
+  },
+  "homepage": "https://github.com/CircleCI-Research/ralph-ci#readme",
+  "dependencies": {
+    "commander": "^14.0.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@types/node": "^25.0.10",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.39.2",
+    "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

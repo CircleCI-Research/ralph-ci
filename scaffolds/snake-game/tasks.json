@@ -1,0 +1,84 @@
+[
+  {
+    "category": "setup",
+    "description": "Create basic HTML structure and canvas element",
+    "steps": [
+      "Create src/index.html with HTML5 boilerplate",
+      "Add canvas element for the game",
+      "Add score display area",
+      "Add game over / restart UI elements",
+      "Link CSS and JS files",
+      "Verify: Open src/index.html in browser shows canvas"
+    ],
+    "passes": false
+  },
+  {
+    "category": "styling",
+    "description": "Style the game with retro aesthetic",
+    "steps": [
+      "Create src/style.css",
+      "Center the game on page",
+      "Style the canvas with border",
+      "Style score display",
+      "Style game over overlay",
+      "Add dark background for retro feel",
+      "Verify: Game looks clean and centered"
+    ],
+    "passes": false
+  },
+  {
+    "category": "core",
+    "description": "Implement snake movement and rendering",
+    "steps": [
+      "Create src/game.js with game constants",
+      "Implement snake as array of segments",
+      "Draw snake on canvas",
+      "Implement continuous movement with game loop",
+      "Add arrow key controls to change direction",
+      "Prevent 180-degree turns",
+      "Verify: Snake moves and responds to arrow keys"
+    ],
+    "passes": false
+  },
+  {
+    "category": "core",
+    "description": "Implement food spawning and eating",
+    "steps": [
+      "Add food object with random position",
+      "Draw food on canvas (different color)",
+      "Detect collision between snake head and food",
+      "Grow snake when food is eaten",
+      "Spawn new food after eating",
+      "Ensure food doesn't spawn on snake",
+      "Verify: Snake grows when eating food"
+    ],
+    "passes": false
+  },
+  {
+    "category": "core",
+    "description": "Implement collision detection and game over",
+    "steps": [
+      "Detect wall collision",
+      "Detect self-collision",
+      "Stop game loop on collision",
+      "Display game over screen with final score",
+      "Update score when eating food",
+      "Verify: Game ends on collision, shows score"
+    ],
+    "passes": false
+  },
+  {
+    "category": "polish",
+    "description": "Add restart functionality and final polish",
+    "steps": [
+      "Add restart button to game over screen",
+      "Reset snake position and length",
+      "Reset score to zero",
+      "Clear and restart game loop",
+      "Add 'Press SPACE to start' initial state",
+      "Create src/README.md with instructions",
+      "Verify: Full game loop works - play, die, restart"
+    ],
+    "passes": false
+  }
+]

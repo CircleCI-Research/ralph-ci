@@ -1,0 +1,29 @@
+{
+  "runner": "claude",
+  "buildAgent": {
+    "timeoutMinutes": 10,
+    "verbose": true
+  },
+  "git": {
+    "autoPush": false,
+    "pushOnLocalSuccess": false,
+    "baseBranch": "current"
+  },
+  "ci": {
+    "enabled": false,
+    "provider": "none",
+    "waitForCI": false,
+    "requireGreenBeforeComplete": false,
+    "approvalGateEnabled": false,
+    "branchStrategy": "feature-branch",
+    "doctor": {
+      "enabled": false
+    }
+  },
+  "reviewGate": {
+    "enabled": true,
+    "testTimeoutSeconds": 60,
+    "lintFixEnabled": true,
+    "testsEnabled": true
+  }
+}

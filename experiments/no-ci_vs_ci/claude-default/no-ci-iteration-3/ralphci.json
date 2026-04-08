@@ -1,0 +1,16 @@
+{
+  "uniqueId": "1.1.1",
+  "runner": "claude",
+  "git": {
+    "autoPush": true,
+    "pushOnLocalSuccess": true
+  },
+  "ci": {
+    "enabled": false,
+    "provider": "circleci",
+    "waitForCI": false,
+    "requireGreenBeforeComplete": false,
+    "approvalGateEnabled": false,
+    "branchStrategy": "feature-branch"
+  }
+}
