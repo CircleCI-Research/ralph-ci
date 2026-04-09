@@ -29,6 +29,8 @@ Traditional AI coding loops have a blind spot: the agent declares victory when l
 
 The name comes from the "Ralph Loop" concept ([Ralph Wiggum](https://ghuntley.com/ralph/))—run an agent in a loop until tasks are complete. RalphCI extends this with CI awareness.
 
+For controlled experiments on the same question (local green vs. pipeline green), see the CircleCI Loop Lab article [_We Let an AI Agent Say 'I Passed.' Was It Actually Good?_](https://loop.circleci.com/we-let-an-ai-agent-say-i-passed-was-it-actually-good).
+
 ## Quick Start
 
 ### Standard Workflow (CI Enabled by Default)
