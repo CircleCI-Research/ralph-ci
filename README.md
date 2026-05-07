@@ -1076,7 +1076,7 @@ my-project/
 4. Run `pnpm lint:fix && pnpm format:fix && pnpm test:run` before opening a PR
 5. Submit a pull request
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+See [CHANGELOG.md](CHANGELOG.md) for release notes. For **Chunk sidecars** context (including the CircleCI CTO blog post), see [docs/CHUNK_SIDECARS.md](docs/CHUNK_SIDECARS.md).
 
 ## License
 
