@@ -273,6 +273,7 @@ ralphci check-ci -v        # Verbose (shows token prefix)
 ralphci check-chunk        # Chunk CLI + auth + sidecar (for reviewGate.chunkSidecar)
 ralphci check-chunk -v     # Verbose Chunk diagnostics
 ralphci check-chunk --no-brew-install  # Do not auto `brew install` when Chunk is missing
+# Product context (CircleCI CTO Rob Zuber): https://circleci.com/blog/chunk-sidecars/
 
 # Primary workflow (CI enabled by default)
 ralphci scaffold           # Create workflow files (CI enabled)

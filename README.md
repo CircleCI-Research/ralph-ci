@@ -25,7 +25,7 @@ Traditional AI coding loops have a blind spot: the agent declares victory when l
 - Agent won't declare victory until the **real pipeline is green**
 - Smart push strategy minimizes CI costs while maintaining verification
 
-**Guaranteed CI awareness:** Unlike prompt-only approaches that rely on the agent to fetch CI status, RalphCI's CLI orchestrates **specialized agents** — a Build Agent for coding, a CI Doctor for failure diagnosis (with full untruncated logs), and a deterministic Review Gate that catches lint/test issues before they ever reach CI. **Optionally**, the Review Gate can also run [CircleCI Chunk](https://circleci.com/blog/chunk-sidecars/) `validate --remote` in a sidecar for CI-parity checks before push ([setup](#optional-circleci-chunk-sidecars)).
+**Guaranteed CI awareness:** Unlike prompt-only approaches that rely on the agent to fetch CI status, RalphCI's CLI orchestrates **specialized agents** — a Build Agent for coding, a CI Doctor for failure diagnosis (with full untruncated logs), and a deterministic Review Gate that catches lint/test issues before they ever reach CI. **Optionally**, the Review Gate can also run Chunk **`validate --remote`** in a sidecar for CI-parity checks before push ([setup](#optional-circleci-chunk-sidecars)). Background from CircleCI CTO **Rob Zuber**: [_Introducing Chunk sidecars: Inner loop validation that keeps up with your agents_](https://circleci.com/blog/chunk-sidecars/).
 
 The name comes from the "Ralph Loop" concept ([Ralph Wiggum](https://ghuntley.com/ralph/))—run an agent in a loop until tasks are complete. RalphCI extends this with CI awareness.
 
@@ -310,13 +310,17 @@ Branch name:      experiments/no-ci_vs_ci/claude-default/ci-iteration-1__0
 
 ## Optional: CircleCI Chunk sidecars
 
-The Review Gate can run **[CircleCI Chunk](https://circleci.com/blog/chunk-sidecars/)** after local `format:fix` / `lint:fix` / `test:run`: it syncs your tree to a **sidecar** and runs **`chunk validate --remote`** (microbuilds). That gives Linux / CI-parity signal **before** a push triggers your full pipeline. It is **off by default** and does **not** replace CircleCI on the branch.
+> **Recommended reading:** CircleCI CTO **Rob Zuber** on inner-loop validation and sidecars — [_Introducing Chunk sidecars: Inner loop validation that keeps up with your agents_](https://circleci.com/blog/chunk-sidecars/) (CircleCI blog).
 
-|                         |                                                                                                                             |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Upstream**            | [Chunk sidecars blog](https://circleci.com/blog/chunk-sidecars/), [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) |
-| **RalphCI**             | `ralphci check-chunk`, `reviewGate.chunkSidecar` in `ralphci.json`                                                          |
-| **Typical requirement** | Paid CircleCI plan with Chunk / sidecar access (see CircleCI docs and changelog)                                            |
+Longer context for users and contributors: [docs/CHUNK_SIDECARS.md](docs/CHUNK_SIDECARS.md).
+
+The Review Gate can run **[Chunk](https://github.com/CircleCI-Public/chunk-cli)** after local `format:fix` / `lint:fix` / `test:run`: it syncs your tree to a **sidecar** and runs **`chunk validate --remote`** (microbuilds). That gives Linux / CI-parity signal **before** a push triggers your full pipeline. It is **off by default** and does **not** replace CircleCI on the branch.
+
+|                         |                                                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Upstream**            | [**Rob Zuber — Introducing Chunk sidecars**](https://circleci.com/blog/chunk-sidecars/), [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) |
+| **RalphCI**             | `ralphci check-chunk`, `reviewGate.chunkSidecar` in `ralphci.json`                                                                                 |
+| **Typical requirement** | Paid CircleCI plan with Chunk / sidecar access (see CircleCI docs and changelog)                                                                   |
 
 **Setup (run in the project you are building — your app repo, not necessarily this `ralph-ci` clone):**
 
@@ -520,7 +524,7 @@ ralphci check-ci -v           # Verbose (shows token prefix)
 
 ### `ralphci check-chunk`
 
-Verify the [CircleCI Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) before enabling `reviewGate.chunkSidecar` in `ralphci.json`. This is separate from `check-ci`: Chunk uses its own auth (`chunk auth set circleci`) and sidecars, while `check-ci` validates `CIRCLE_TOKEN` against the CircleCI HTTP API.
+Verify the [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) before enabling `reviewGate.chunkSidecar` in `ralphci.json`. For product context, see CircleCI CTO **Rob Zuber**’s post [_Introducing Chunk sidecars: Inner loop validation that keeps up with your agents_](https://circleci.com/blog/chunk-sidecars/). This command is separate from `check-ci`: Chunk uses its own auth (`chunk auth set circleci`) and sidecars, while `check-ci` validates `CIRCLE_TOKEN` against the CircleCI HTTP API.
 
 ```bash
 ralphci check-chunk              # From repo root (or cwd)
