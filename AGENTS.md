@@ -272,6 +272,7 @@ ralphci check-ci           # Check CIRCLE_TOKEN and API connection
 ralphci check-ci -v        # Verbose (shows token prefix)
 ralphci check-chunk        # Chunk CLI + auth + sidecar (for reviewGate.chunkSidecar)
 ralphci check-chunk -v     # Verbose Chunk diagnostics
+ralphci check-chunk --no-brew-install  # Do not auto `brew install` when Chunk is missing
 
 # Primary workflow (CI enabled by default)
 ralphci scaffold           # Create workflow files (CI enabled)

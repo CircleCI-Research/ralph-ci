@@ -38,11 +38,11 @@ describe("checkChunk", () => {
 
   it("exits 1 when chunk auth status fails", () => {
     vi.mocked(execFileSync).mockImplementation(
-      (_file: string, args: readonly string[]) => {
-        if (args[0] === "--version") {
+      (file: string, args: readonly string[]) => {
+        if (file === "chunk" && args[0] === "--version") {
           return "chunk v0.0.1-test\n";
         }
-        if (args[0] === "auth") {
+        if (file === "chunk" && args[0] === "auth") {
           const err = new Error("auth failed") as Error & {
             stderr?: string;
             stdout?: string;
@@ -62,11 +62,13 @@ describe("checkChunk", () => {
 
   it("completes without exit when cli, auth, list, and sidecar succeed", () => {
     vi.mocked(execFileSync).mockImplementation(
-      (_file: string, args: readonly string[]) => {
-        if (args[0] === "--version") return "chunk v0.0.1-test\n";
-        if (args[0] === "auth") return "circleci\n";
-        if (args[0] === "validate") return "tests\n";
-        if (args[0] === "sidecar") return "active-sidecar-1\n";
+      (file: string, args: readonly string[]) => {
+        if (file === "chunk" && args[0] === "--version")
+          return "chunk v0.0.1-test\n";
+        if (file === "chunk" && args[0] === "auth") return "circleci\n";
+        if (file === "chunk" && args[0] === "validate") return "tests\n";
+        if (file === "chunk" && args[0] === "sidecar")
+          return "active-sidecar-1\n";
         return "";
       },
     );
@@ -79,13 +81,14 @@ describe("checkChunk", () => {
 
   it("does not exit when validate --list fails (warning only)", () => {
     vi.mocked(execFileSync).mockImplementation(
-      (_file: string, args: readonly string[]) => {
-        if (args[0] === "--version") return "chunk v0.0.1-test\n";
-        if (args[0] === "auth") return "ok\n";
-        if (args[0] === "validate") {
+      (file: string, args: readonly string[]) => {
+        if (file === "chunk" && args[0] === "--version")
+          return "chunk v0.0.1-test\n";
+        if (file === "chunk" && args[0] === "auth") return "ok\n";
+        if (file === "chunk" && args[0] === "validate") {
           throw new Error("no config");
         }
-        if (args[0] === "sidecar") return "sc-1\n";
+        if (file === "chunk" && args[0] === "sidecar") return "sc-1\n";
         return "";
       },
     );
@@ -94,5 +97,55 @@ describe("checkChunk", () => {
       checkChunk({ workingDirectory: "/tmp/ralph-chunk-test" }),
     ).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs brew install when chunk is missing then continues", () => {
+    let chunkVersionCalls = 0;
+    vi.mocked(execFileSync).mockImplementation(
+      (file: string, args: readonly string[]) => {
+        if (file === "brew" && args[0] === "--version") return "Homebrew 4\n";
+        if (file === "brew" && args[0] === "install") return "";
+        if (file === "chunk" && args[0] === "--version") {
+          chunkVersionCalls += 1;
+          if (chunkVersionCalls === 1) {
+            throw new Error("ENOENT");
+          }
+          return "chunk 2.0\n";
+        }
+        if (file === "chunk" && args[0] === "auth") return "ok\n";
+        if (file === "chunk" && args[0] === "validate") return "tests\n";
+        if (file === "chunk" && args[0] === "sidecar") return "sc-9\n";
+        return "";
+      },
+    );
+
+    expect(() =>
+      checkChunk({ workingDirectory: "/tmp/ralph-chunk-test" }),
+    ).not.toThrow();
+    expect(chunkVersionCalls).toBe(2);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips brew when --no-brew-install via brewInstallWhenMissing false", () => {
+    let brewInstallCalls = 0;
+    vi.mocked(execFileSync).mockImplementation(
+      (file: string, args: readonly string[]) => {
+        if (file === "brew" && args[0] === "install") {
+          brewInstallCalls += 1;
+        }
+        if (file === "chunk" && args[0] === "--version") {
+          throw new Error("ENOENT");
+        }
+        return "";
+      },
+    );
+
+    expect(() =>
+      checkChunk({
+        workingDirectory: "/tmp/ralph-chunk-test",
+        brewInstallWhenMissing: false,
+      }),
+    ).toThrow("EXIT_1");
+    expect(brewInstallCalls).toBe(0);
   });
 });

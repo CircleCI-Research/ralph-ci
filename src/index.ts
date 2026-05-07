@@ -68,11 +68,16 @@ program
     "Repository root to run Chunk commands in (default: current directory)",
   )
   .option("-v, --verbose", "Show extra auth output and stderr details")
+  .option(
+    "--no-brew-install",
+    "Do not run `brew install` when Chunk is missing (for CI or locked-down machines)",
+  )
   .action((options) => {
     try {
       checkChunk({
         verbose: options.verbose,
         workingDirectory: options.workingDirectory,
+        brewInstallWhenMissing: options.brewInstall,
       });
     } catch (error) {
       console.error(

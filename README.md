@@ -505,7 +505,10 @@ Verify the [CircleCI Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) be
 ralphci check-chunk              # From repo root (or cwd)
 ralphci check-chunk -w ./my-app
 ralphci check-chunk -v           # Verbose (token prefix, more auth/sidecar output)
+ralphci check-chunk --no-brew-install   # Fail if Chunk missing; never run Homebrew
 ```
+
+If Chunk is not installed and **Homebrew is on PATH** (macOS or Linux), `check-chunk` runs `brew install CircleCI-Public/circleci/chunk` automatically, then continues. Use `--no-brew-install` in CI or locked-down environments.
 
 **What it checks:**
 
@@ -1003,7 +1006,7 @@ pnpm test                        # Run all tests
 pnpm run test:watch              # Watch mode
 ```
 
-Test coverage: 385 tests across 24 test files covering file operations, commands, utilities, review gate, Chunk CLI, CI cache, and configuration.
+Test coverage: 387 tests across 24 test files covering file operations, commands, utilities, review gate, Chunk CLI, CI cache, and configuration.
 
 ## Package Manager
 

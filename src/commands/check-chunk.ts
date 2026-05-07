@@ -10,11 +10,47 @@ export interface CheckChunkOptions {
   verbose?: boolean;
   /** Repository root (default: cwd) */
   workingDirectory?: string;
+  /**
+   * When Chunk is missing, try `brew install CircleCI-Public/circleci/chunk` if Homebrew is on PATH.
+   * Default true. Use false (or CLI `--no-brew-install`) in CI or when installs must not run automatically.
+   */
+  brewInstallWhenMissing?: boolean;
 }
 
 const AUTH_TIMEOUT_MS = 20_000;
 const LIST_TIMEOUT_MS = 25_000;
 const SIDECAR_TIMEOUT_MS = 20_000;
+const BREW_VERSION_TIMEOUT_MS = 10_000;
+/** Homebrew installs can take several minutes on a cold cache. */
+const BREW_INSTALL_TIMEOUT_MS = 900_000;
+
+function isHomebrewAvailable(): boolean {
+  try {
+    execFileSync("brew", ["--version"], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: BREW_VERSION_TIMEOUT_MS,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run `brew install` for the Chunk tap. Uses inherited stdio so the user sees progress.
+ * Throws if brew exits non-zero.
+ */
+export function installChunkViaHomebrew(): void {
+  execFileSync("brew", ["install", "CircleCI-Public/circleci/chunk"], {
+    stdio: "inherit",
+    timeout: BREW_INSTALL_TIMEOUT_MS,
+    env: {
+      ...process.env,
+      HOMEBREW_NO_AUTO_UPDATE: process.env.HOMEBREW_NO_AUTO_UPDATE ?? "1",
+    },
+  });
+}
 
 function runChunk(
   args: string[],
@@ -44,19 +80,71 @@ function runChunk(
   }
 }
 
+function resolveChunkVersionOrExit(
+  cwd: string,
+  brewInstallWhenMissing: boolean,
+): string {
+  let version = getChunkVersion(cwd);
+  if (version) {
+    return version;
+  }
+
+  if (
+    brewInstallWhenMissing &&
+    (process.platform === "darwin" || process.platform === "linux") &&
+    isHomebrewAvailable()
+  ) {
+    try {
+      console.log("❌ Chunk CLI not found.");
+      console.log(
+        "\n📦 Installing Chunk via Homebrew (use --no-brew-install to skip)...\n",
+      );
+      installChunkViaHomebrew();
+      version = getChunkVersion(cwd);
+      if (version) {
+        return version;
+      }
+      console.log("");
+      console.log(
+        "❌ Homebrew finished but `chunk` is still not on PATH. Open a new terminal or run: hash -r",
+      );
+      process.exit(1);
+    } catch (error) {
+      console.log("");
+      console.log(
+        `❌ Homebrew install failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      console.log("");
+      console.log(
+        "   Try manually: brew install CircleCI-Public/circleci/chunk",
+      );
+      process.exit(1);
+    }
+  }
+
+  console.log("❌ Chunk CLI not found or not working.");
+  if (!brewInstallWhenMissing) {
+    console.log(
+      "   (Automatic brew install was disabled — re-run without --no-brew-install to try Homebrew.)",
+    );
+  } else if (!isHomebrewAvailable()) {
+    console.log(
+      "   Homebrew not found on PATH. Install Chunk manually or install Homebrew first:",
+    );
+  }
+  console.log("   Install: brew install CircleCI-Public/circleci/chunk");
+  console.log("   Docs: https://github.com/CircleCI-Public/chunk-cli");
+  process.exit(1);
+}
+
 export function checkChunk(options: CheckChunkOptions = {}): void {
   const verbose = options.verbose ?? false;
+  const brewInstallWhenMissing = options.brewInstallWhenMissing ?? true;
   const cwd = path.resolve(options.workingDirectory ?? process.cwd());
 
   console.log("🔍 Checking Chunk CLI (CircleCI sidecars)...\n");
 
-  const version = getChunkVersion(cwd);
-  if (!version) {
-    console.log("❌ Chunk CLI not found or not working.");
-    console.log("   Install: brew install CircleCI-Public/circleci/chunk");
-    console.log("   Docs: https://github.com/CircleCI-Public/chunk-cli");
-    process.exit(1);
-  }
+  const version = resolveChunkVersionOrExit(cwd, brewInstallWhenMissing);
 
   console.log(`✅ Chunk CLI\n   ${version}`);
 
