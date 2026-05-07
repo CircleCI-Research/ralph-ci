@@ -497,6 +497,23 @@ ralphci check-ci -v           # Verbose (shows token prefix)
 ✅ CircleCI connection verified!
 ```
 
+### `ralphci check-chunk`
+
+Verify the [CircleCI Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) before enabling `reviewGate.chunkSidecar` in `ralphci.json`. This is separate from `check-ci`: Chunk uses its own auth (`chunk auth set circleci`) and sidecars, while `check-ci` validates `CIRCLE_TOKEN` against the CircleCI HTTP API.
+
+```bash
+ralphci check-chunk              # From repo root (or cwd)
+ralphci check-chunk -w ./my-app
+ralphci check-chunk -v           # Verbose (token prefix, more auth/sidecar output)
+```
+
+**What it checks:**
+
+1. `chunk` is installed and responds to `--version`
+2. `chunk auth status` succeeds (CircleCI auth via Chunk)
+3. `chunk validate --list` (warns if the project is not initialized with `chunk init`)
+4. `chunk sidecar current` (warns if no active sidecar — required before `chunk validate --remote` in the Review Gate)
+
 ### `ralphci scaffold`
 
 Generate RalphCI workflow files. CI integration is enabled by default.
@@ -986,7 +1003,7 @@ pnpm test                        # Run all tests
 pnpm run test:watch              # Watch mode
 ```
 
-Test coverage: 378 tests across 22 test files covering file operations, commands, utilities, review gate, CI cache, and configuration.
+Test coverage: 385 tests across 24 test files covering file operations, commands, utilities, review gate, Chunk CLI, CI cache, and configuration.
 
 ## Package Manager
 

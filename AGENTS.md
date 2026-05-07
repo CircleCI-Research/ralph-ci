@@ -270,6 +270,8 @@ A commit is "worthy" when it passes all three criteria:
 # Verify CircleCI connection
 ralphci check-ci           # Check CIRCLE_TOKEN and API connection
 ralphci check-ci -v        # Verbose (shows token prefix)
+ralphci check-chunk        # Chunk CLI + auth + sidecar (for reviewGate.chunkSidecar)
+ralphci check-chunk -v     # Verbose Chunk diagnostics
 
 # Primary workflow (CI enabled by default)
 ralphci scaffold           # Create workflow files (CI enabled)
@@ -310,6 +312,7 @@ ralphci run --no-draft-pr                     # Create PR as ready for review (n
 src/
 ├── commands/
 │   ├── check-ci.ts       # Verify CircleCI API connection
+│   ├── check-chunk.ts    # Verify Chunk CLI / auth / sidecar for remote validate
 │   ├── run.ts            # Legacy markdown workflow
 │   ├── run-json.ts       # Legacy JSON workflow
 │   ├── run-ci.ts         # Main workflow — phased loop (CI optional via --no-ci)

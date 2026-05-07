@@ -14,6 +14,7 @@ import { setTimeout, clearTimeout } from "timers";
 import { existsSync } from "fs";
 import path from "path";
 import { ReviewGateConfig } from "./config.js";
+import { isChunkCliAvailable } from "./chunk-cli.js";
 import { c } from "./terminal.js";
 
 /**
@@ -272,22 +273,6 @@ export async function runTestsWithTimeout(
       });
     });
   });
-}
-
-/**
- * Whether the Chunk CLI is on PATH and responds to `--version`.
- */
-export function isChunkCliAvailable(): boolean {
-  try {
-    execSync("chunk --version", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 8_000,
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
