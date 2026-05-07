@@ -2,6 +2,32 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { CommandError } from "./errors.js";
 
+/**
+ * CircleCI Chunk sidecar remote validation (optional).
+ * Runs after local format/lint/tests when enabled — see Chunk CLI README:
+ * https://github.com/CircleCI-Public/chunk-cli/blob/main/README.md
+ */
+export interface ChunkSidecarGateConfig {
+  /** Run `chunk sidecar sync` + `chunk validate --remote` after local steps (default: false) */
+  enabled: boolean;
+  /** Seconds before killing `chunk sidecar sync` (default: 180) */
+  syncTimeoutSeconds: number;
+  /** Seconds before killing `chunk validate --remote` (default: 120) */
+  remoteValidateTimeoutSeconds: number;
+  /**
+   * If true, Review Gate fails when the Chunk CLI is missing or not runnable.
+   * If false, missing CLI skips remote validation with a dim log line (default: false).
+   */
+  strictCli: boolean;
+  /**
+   * Run `chunk validate --remote` only (skip `chunk sidecar sync`).
+   * Use when you sync manually or another tool syncs for you (default: false).
+   */
+  skipSync: boolean;
+  /** Optional validation name: `chunk validate <name> --remote` */
+  validateTarget?: string;
+}
+
 export interface ReviewGateConfig {
   /** Whether the review gate is enabled (default: true) */
   enabled: boolean;
@@ -13,6 +39,8 @@ export interface ReviewGateConfig {
   lintFixEnabled: boolean;
   /** Whether to run tests as part of the gate (default: true) */
   testsEnabled: boolean;
+  /** Chunk sidecar remote microbuilds (resolved with defaults) */
+  chunkSidecar: ChunkSidecarGateConfig;
 }
 
 export interface BuildAgentConfig {
@@ -36,12 +64,19 @@ export interface RalConfig {
   model?: string;
   taskSelection?: "first-incomplete" | "smart";
   buildAgent?: Partial<BuildAgentConfig>;
-  reviewGate?: Partial<ReviewGateConfig>;
+  reviewGate?: ReviewGateConfigInput;
   /** @deprecated Use ci.doctor instead. Kept for backward compatibility. */
   ciDoctor?: Partial<CIDoctorConfig>;
   /** CI doctor config nested under ci (preferred) */
   ci?: { doctor?: Partial<CIDoctorConfig>; [key: string]: unknown };
 }
+
+/** ralphci.json `reviewGate` object (chunkSidecar fields may be partial) */
+export type ReviewGateConfigInput = Partial<
+  Omit<ReviewGateConfig, "chunkSidecar">
+> & {
+  chunkSidecar?: Partial<ChunkSidecarGateConfig>;
+};
 
 export type ConfigSource = "working-directory" | "root-directory" | "default";
 
@@ -56,12 +91,21 @@ export const DEFAULT_BUILD_AGENT_CONFIG: BuildAgentConfig = {
   verbose: true,
 };
 
+export const DEFAULT_CHUNK_SIDECAR_GATE_CONFIG: ChunkSidecarGateConfig = {
+  enabled: false,
+  syncTimeoutSeconds: 180,
+  remoteValidateTimeoutSeconds: 120,
+  strictCli: false,
+  skipSync: false,
+};
+
 export const DEFAULT_REVIEW_GATE_CONFIG: ReviewGateConfig = {
   enabled: true,
   testTimeoutSeconds: 60,
   formatFixEnabled: true,
   lintFixEnabled: true,
   testsEnabled: true,
+  chunkSidecar: { ...DEFAULT_CHUNK_SIDECAR_GATE_CONFIG },
 };
 
 export const DEFAULT_CI_DOCTOR_CONFIG: CIDoctorConfig = {
@@ -85,11 +129,16 @@ export function resolveBuildAgentConfig(
  * Resolve a partial ReviewGateConfig into a full one with defaults.
  */
 export function resolveReviewGateConfig(
-  partial?: Partial<ReviewGateConfig>,
+  partial?: ReviewGateConfigInput,
 ): ReviewGateConfig {
+  const chunkPartial = partial?.chunkSidecar;
   return {
     ...DEFAULT_REVIEW_GATE_CONFIG,
     ...partial,
+    chunkSidecar: {
+      ...DEFAULT_CHUNK_SIDECAR_GATE_CONFIG,
+      ...chunkPartial,
+    },
   };
 }
 

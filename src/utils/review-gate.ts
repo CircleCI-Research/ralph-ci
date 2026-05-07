@@ -1,11 +1,12 @@
 /**
  * Review Gate — deterministic pre-push quality gate.
  *
- * Runs lint:fix + test:run (with hard timeout) between the Build Agent
- * finishing and the CLI pushing. No LLM involved — this is pure automation.
+ * Runs format:fix + lint:fix + test:run (with hard timeout), and optionally
+ * CircleCI Chunk sidecar remote validation (`chunk sidecar sync` +
+ * `chunk validate --remote`) when enabled in config.
  *
- * The gate catches issues the Build Agent missed (e.g., ESLint quote style)
- * before they waste a CI run.
+ * No LLM involved — this is pure automation. The gate catches issues before
+ * they waste a full pipeline run.
  */
 
 import { execSync, spawn } from "child_process";
@@ -48,6 +49,13 @@ export interface ReviewGateResult {
   testsPass: boolean;
   testError: string | null;
   testTimedOut: boolean;
+  /** Chunk `validate --remote` succeeded, or sidecar step was skipped / disabled */
+  chunkRemotePass: boolean;
+  chunkSidecarSkipped: boolean;
+  chunkSidecarSkipReason: string | null;
+  chunkSyncError: string | null;
+  chunkRemoteError: string | null;
+  chunkRemoteTimedOut: boolean;
   durationMs: number;
 }
 
@@ -267,6 +275,105 @@ export async function runTestsWithTimeout(
 }
 
 /**
+ * Whether the Chunk CLI is on PATH and responds to `--version`.
+ */
+export function isChunkCliAvailable(): boolean {
+  try {
+    execSync("chunk --version", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 8_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run a `chunk` subprocess with a hard timeout (SIGKILL on expiry).
+ */
+async function runChunkWithTimeout(
+  args: string[],
+  cwd: string,
+  timeoutSeconds: number,
+): Promise<{ pass: boolean; timedOut: boolean; error: string | null }> {
+  return new Promise((resolve) => {
+    const child = spawn("chunk", args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    child.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGKILL");
+    }, timeoutSeconds * 1000);
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+
+      if (killed) {
+        const captured = (stdout + "\n" + stderr).trim();
+        const tail = captured.split("\n").slice(-60).join("\n");
+        resolve({
+          pass: false,
+          timedOut: true,
+          error: [
+            `Chunk command timed out after ${timeoutSeconds}s.`,
+            "",
+            "--- Output (tail) ---",
+            tail || "(no output captured)",
+          ].join("\n"),
+        });
+        return;
+      }
+
+      if (code === 0) {
+        resolve({ pass: true, timedOut: false, error: null });
+      } else {
+        const output = (stderr + "\n" + stdout).trim();
+        const lastLines = output.split("\n").slice(-80).join("\n");
+        resolve({
+          pass: false,
+          timedOut: false,
+          error: `Chunk exited with code ${code}:\n${lastLines}`,
+        });
+      }
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      if (err.message.includes("ENOENT")) {
+        resolve({
+          pass: false,
+          timedOut: false,
+          error:
+            "Chunk CLI not found. Install: brew install CircleCI-Public/circleci/chunk",
+        });
+        return;
+      }
+      resolve({
+        pass: false,
+        timedOut: false,
+        error: `Failed to run chunk: ${err.message}`,
+      });
+    });
+  });
+}
+
+/**
  * Run the full Review Gate: format:fix → lint:fix → tests (with timeout).
  *
  * Returns a structured result indicating what passed, what failed,
@@ -371,8 +478,101 @@ export async function runReviewGate(
     console.log(c.dim("  ⊘ Tests disabled"));
   }
 
+  const localGatePassed =
+    formatError === null && lintError === null && testsPass;
+
+  let chunkRemotePass = true;
+  let chunkSidecarSkipped = false;
+  let chunkSidecarSkipReason: string | null = null;
+  let chunkSyncError: string | null = null;
+  let chunkRemoteError: string | null = null;
+  let chunkRemoteTimedOut = false;
+
+  const chunkCfg = config.chunkSidecar;
+  if (chunkCfg.enabled) {
+    if (!localGatePassed) {
+      console.log(
+        c.dim(
+          "  ⊘ Chunk sidecar skipped (local Review Gate steps did not pass)",
+        ),
+      );
+    } else if (!isChunkCliAvailable()) {
+      const hint =
+        "Install: brew install CircleCI-Public/circleci/chunk — see https://github.com/CircleCI-Public/chunk-cli";
+      if (chunkCfg.strictCli) {
+        chunkRemotePass = false;
+        chunkRemoteError = `Chunk CLI not found or not working. ${hint}`;
+        console.log(c.red(`  ✗ ${chunkRemoteError}`));
+      } else {
+        chunkSidecarSkipped = true;
+        chunkSidecarSkipReason = `Chunk CLI not available — ${hint}`;
+        console.log(c.dim(`  ⊘ ${chunkSidecarSkipReason}`));
+      }
+    } else {
+      if (!chunkCfg.skipSync) {
+        console.log(
+          c.dim(
+            `  ☁️  Chunk: sidecar sync (timeout: ${chunkCfg.syncTimeoutSeconds}s)...`,
+          ),
+        );
+        const syncResult = await runChunkWithTimeout(
+          ["sidecar", "sync"],
+          workingDirectory,
+          chunkCfg.syncTimeoutSeconds,
+        );
+        if (!syncResult.pass) {
+          chunkRemotePass = false;
+          chunkSyncError = syncResult.error;
+          if (syncResult.timedOut) {
+            console.log(
+              c.red(
+                `  ✗ Chunk sidecar sync TIMED OUT after ${chunkCfg.syncTimeoutSeconds}s`,
+              ),
+            );
+          } else {
+            console.log(c.red("  ✗ Chunk sidecar sync failed"));
+          }
+        } else {
+          console.log(c.green("  ✓ Chunk sidecar sync complete"));
+        }
+      }
+
+      if (chunkRemotePass) {
+        const validateArgs = chunkCfg.validateTarget
+          ? ["validate", chunkCfg.validateTarget, "--remote"]
+          : ["validate", "--remote"];
+        console.log(
+          c.dim(
+            `  ☁️  Chunk: validate --remote${chunkCfg.validateTarget ? ` (${chunkCfg.validateTarget})` : ""} (timeout: ${chunkCfg.remoteValidateTimeoutSeconds}s)...`,
+          ),
+        );
+        const remoteResult = await runChunkWithTimeout(
+          validateArgs,
+          workingDirectory,
+          chunkCfg.remoteValidateTimeoutSeconds,
+        );
+        if (!remoteResult.pass) {
+          chunkRemotePass = false;
+          chunkRemoteError = remoteResult.error;
+          chunkRemoteTimedOut = remoteResult.timedOut;
+          if (remoteResult.timedOut) {
+            console.log(
+              c.red(
+                `  ✗ Chunk validate --remote TIMED OUT after ${chunkCfg.remoteValidateTimeoutSeconds}s`,
+              ),
+            );
+          } else {
+            console.log(c.red("  ✗ Chunk validate --remote failed"));
+          }
+        } else {
+          console.log(c.green("  ✓ Chunk validate --remote passed"));
+        }
+      }
+    }
+  }
+
   const durationMs = Date.now() - start;
-  const passed = formatError === null && lintError === null && testsPass;
+  const passed = localGatePassed && chunkRemotePass;
 
   if (passed) {
     console.log(
@@ -395,6 +595,12 @@ export async function runReviewGate(
     testsPass,
     testError,
     testTimedOut,
+    chunkRemotePass,
+    chunkSidecarSkipped,
+    chunkSidecarSkipReason,
+    chunkSyncError,
+    chunkRemoteError,
+    chunkRemoteTimedOut,
     durationMs,
   };
 }
@@ -458,6 +664,45 @@ export function buildReviewGateFeedback(result: ReviewGateResult): string {
     lines.push("");
     lines.push("```");
     lines.push(result.testError);
+    lines.push("```");
+    lines.push("");
+  }
+
+  if (result.chunkSyncError) {
+    lines.push("### Chunk sidecar sync failed");
+    lines.push("");
+    lines.push(
+      "Remote validation could not run until the workspace is synced to the sidecar.",
+    );
+    lines.push("");
+    lines.push("```");
+    lines.push(result.chunkSyncError);
+    lines.push("```");
+    lines.push("");
+  }
+
+  if (result.chunkRemoteTimedOut) {
+    lines.push("### Chunk validate --remote timed out");
+    lines.push("");
+    lines.push(
+      "Microbuild validation in the sidecar did not finish in time. Check for slow tests or raise `reviewGate.chunkSidecar.remoteValidateTimeoutSeconds` in ralphci.json.",
+    );
+    lines.push("");
+    if (result.chunkRemoteError) {
+      lines.push("```");
+      lines.push(result.chunkRemoteError);
+      lines.push("```");
+      lines.push("");
+    }
+  } else if (result.chunkRemoteError) {
+    lines.push("### Chunk validate --remote failed");
+    lines.push("");
+    lines.push(
+      "CircleCI Chunk reported a failure in the cloud sidecar (CI-parity checks). Fix the issues below; see https://circleci.com/blog/chunk-sidecars/",
+    );
+    lines.push("");
+    lines.push("```");
+    lines.push(result.chunkRemoteError);
     lines.push("```");
     lines.push("");
   }

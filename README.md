@@ -69,7 +69,7 @@ cat metrics.json   # Experiment data (iterations, tokens, CI queries)
 - **CI Status** checked at start of each iteration (cached — skips API when no push occurred)
 - If CI is red → **CI Doctor** agent diagnoses + fixes failure (full untruncated logs)
 - If CI is green → **Build Agent** works on task (lighter, focused prompt)
-- **Review Gate** validates before every push: `lint:fix` + `test:run` (60s timeout — never hangs)
+- **Review Gate** validates before every push: `lint:fix` + `test:run` (60s timeout — never hangs), optionally Chunk `validate --remote` after local checks
 - **Smart push**: Only pushes when Review Gate passes (saves CI costs)
 - Approval gate before deploy (configurable)
 
@@ -202,22 +202,28 @@ Create a `ralphci.json` file in your project root or feature directory to config
 
 **Configuration Options:**
 
-| Field                           | Type                              | Default              | Description                                                                                               |
-| ------------------------------- | --------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------- |
-| `runner`                        | `"claude"` \| `"cursor"`          | `"claude"`           | Which AI CLI to use                                                                                       |
-| `model`                         | `string`                          | —                    | Model to use (e.g. `"claude-opus-4-6"` for Claude, `"composer-1"` for Cursor)                             |
-| `uniqueId`                      | `string`                          | —                    | Unique ID for auto-branch and PR creation (see [Auto Branch & PR](#auto-branch--pr))                      |
-| `taskSelection`                 | `"first-incomplete"` \| `"smart"` | `"first-incomplete"` | Task selection strategy                                                                                   |
-| `git.autoPush`                  | `boolean`                         | `true`               | Auto-push commits to remote (independent of CI)                                                           |
-| `git.pushOnLocalSuccess`        | `boolean`                         | `true`               | Only push when local tests pass (smart push)                                                              |
-| `git.baseBranch`                | `string`                          | —                    | Base branch for feature branches. `"current"` = branch at run start. Default: auto-detect `main`/`master` |
-| `reviewGate.enabled`            | `boolean`                         | `true`               | Enable pre-push quality gate (lint:fix + tests)                                                           |
-| `reviewGate.testTimeoutSeconds` | `number`                          | `60`                 | Hard timeout for test:run (prevents hanging)                                                              |
-| `reviewGate.lintFixEnabled`     | `boolean`                         | `true`               | Auto-run lint:fix before push                                                                             |
-| `reviewGate.testsEnabled`       | `boolean`                         | `true`               | Run tests as part of Review Gate                                                                          |
-| `ci.doctor.enabled`             | `boolean`                         | `true`               | Enable CI Doctor agent for failure diagnosis                                                              |
-| `ci.doctor.maxLogLength`        | `number`                          | `0`                  | Max log chars (0 = unlimited — full logs for CI Doctor)                                                   |
-| `ci.doctor.model`               | `string`                          | —                    | Model override for CI Doctor (defaults to main model)                                                     |
+| Field                                                  | Type                              | Default              | Description                                                                                                                                              |
+| ------------------------------------------------------ | --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runner`                                               | `"claude"` \| `"cursor"`          | `"claude"`           | Which AI CLI to use                                                                                                                                      |
+| `model`                                                | `string`                          | —                    | Model to use (e.g. `"claude-opus-4-6"` for Claude, `"composer-1"` for Cursor)                                                                            |
+| `uniqueId`                                             | `string`                          | —                    | Unique ID for auto-branch and PR creation (see [Auto Branch & PR](#auto-branch--pr))                                                                     |
+| `taskSelection`                                        | `"first-incomplete"` \| `"smart"` | `"first-incomplete"` | Task selection strategy                                                                                                                                  |
+| `git.autoPush`                                         | `boolean`                         | `true`               | Auto-push commits to remote (independent of CI)                                                                                                          |
+| `git.pushOnLocalSuccess`                               | `boolean`                         | `true`               | Only push when local tests pass (smart push)                                                                                                             |
+| `git.baseBranch`                                       | `string`                          | —                    | Base branch for feature branches. `"current"` = branch at run start. Default: auto-detect `main`/`master`                                                |
+| `reviewGate.enabled`                                   | `boolean`                         | `true`               | Enable pre-push quality gate (lint:fix + tests)                                                                                                          |
+| `reviewGate.testTimeoutSeconds`                        | `number`                          | `60`                 | Hard timeout for test:run (prevents hanging)                                                                                                             |
+| `reviewGate.lintFixEnabled`                            | `boolean`                         | `true`               | Auto-run lint:fix before push                                                                                                                            |
+| `reviewGate.testsEnabled`                              | `boolean`                         | `true`               | Run tests as part of Review Gate                                                                                                                         |
+| `reviewGate.chunkSidecar.enabled`                      | `boolean`                         | `false`              | After local format/lint/tests pass, run `chunk sidecar sync` and `chunk validate --remote` ([Chunk sidecars](https://circleci.com/blog/chunk-sidecars/)) |
+| `reviewGate.chunkSidecar.strictCli`                    | `boolean`                         | `false`              | If true, Review Gate fails when the Chunk CLI is missing; if false, remote step is skipped with a log line                                               |
+| `reviewGate.chunkSidecar.skipSync`                     | `boolean`                         | `false`              | Only run `chunk validate --remote` (no `chunk sidecar sync`)                                                                                             |
+| `reviewGate.chunkSidecar.syncTimeoutSeconds`           | `number`                          | `180`                | Hard timeout for `chunk sidecar sync`                                                                                                                    |
+| `reviewGate.chunkSidecar.remoteValidateTimeoutSeconds` | `number`                          | `120`                | Hard timeout for `chunk validate --remote`                                                                                                               |
+| `reviewGate.chunkSidecar.validateTarget`               | `string`                          | —                    | Optional microbuild name: `chunk validate <name> --remote`                                                                                               |
+| `ci.doctor.enabled`                                    | `boolean`                         | `true`               | Enable CI Doctor agent for failure diagnosis                                                                                                             |
+| `ci.doctor.maxLogLength`                               | `number`                          | `0`                  | Max log chars (0 = unlimited — full logs for CI Doctor)                                                                                                  |
+| `ci.doctor.model`                                      | `string`                          | —                    | Model override for CI Doctor (defaults to main model)                                                                                                    |
 
 **Task Selection Modes:**
 
@@ -232,6 +238,8 @@ Create a `ralphci.json` file in your project root or feature directory to config
 - If `ci.enabled` is set to `false` in the config, CI remains disabled even without the `--no-ci` flag. The config setting takes precedence.
 - Git push behavior (`git.autoPush`, `git.pushOnLocalSuccess`) is independent of CI. You can auto-push to GitHub even with CI disabled.
 - `git.baseBranch` controls which branch feature branches are created from. Set to `"current"` to branch from wherever you are when you run `ralphci run`, or specify an explicit branch name like `"develop"`. If omitted, auto-detects `main` or `master`.
+
+**Chunk sidecar (optional):** For [CircleCI Chunk sidecars](https://circleci.com/blog/chunk-sidecars/) and microbuilds, install the [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli), run `chunk init` and `chunk auth set circleci` in your repo, create/select a sidecar as in the Chunk docs, then set `reviewGate.chunkSidecar.enabled` to `true` in `ralphci.json`. The Review Gate will run local format/lint/tests first, then sync to the sidecar and run `chunk validate --remote` before push. Requires a paid CircleCI plan with sidecar preview access.
 
 **Example with working directory:**
 
@@ -978,7 +986,7 @@ pnpm test                        # Run all tests
 pnpm run test:watch              # Watch mode
 ```
 
-Test coverage: 379 tests across 21 test files covering file operations, commands, utilities, review gate, CI cache, and configuration.
+Test coverage: 378 tests across 22 test files covering file operations, commands, utilities, review gate, CI cache, and configuration.
 
 ## Package Manager
 

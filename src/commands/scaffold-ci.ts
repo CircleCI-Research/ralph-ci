@@ -194,13 +194,14 @@ CI Configuration:
 Agent Architecture:
   • Build Agent:   Writes code + tests (CI-aware, lighter prompt)
   • CI Doctor:     Diagnoses and fixes CI failures (ci.doctor in ralphci.json)
-  • Review Gate:   Pre-push lint:fix + tests with ${ciConfig.reviewGate?.testTimeoutSeconds ?? 60}s timeout
+  • Review Gate:   Pre-push lint:fix + tests with ${ciConfig.reviewGate?.testTimeoutSeconds ?? 60}s timeout (optional Chunk validate --remote — see README)
 
 Next Steps:
   1. Edit plan.md with your project details
   2. Edit tasks.json with your task list
   3. Ensure CircleCI MCP server is configured
-  4. Run: ralphci run -m 10 -w ${workingDir}
+  4. (Optional) Enable Chunk sidecar remote validation: Chunk CLI + reviewGate.chunkSidecar in ralphci.json — see README
+  5. Run: ralphci run -m 10 -w ${workingDir}
 
 The loop will:
   • Check CI status (cached — only queries after push)

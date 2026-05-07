@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { loadConfig } from "./config.js";
+import { loadConfig, resolveReviewGateConfig } from "./config.js";
 import { CommandError } from "./errors.js";
 import { readFile } from "fs/promises";
 
@@ -286,5 +286,26 @@ describe("loadConfig", () => {
       source: "working-directory",
       path: "/test/dir/ralphci.json",
     });
+  });
+});
+
+describe("resolveReviewGateConfig", () => {
+  it("merges chunkSidecar defaults when omitted", () => {
+    const r = resolveReviewGateConfig({ enabled: true });
+    expect(r.chunkSidecar.enabled).toBe(false);
+    expect(r.chunkSidecar.syncTimeoutSeconds).toBe(180);
+    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(120);
+    expect(r.chunkSidecar.strictCli).toBe(false);
+    expect(r.chunkSidecar.skipSync).toBe(false);
+  });
+
+  it("merges partial chunkSidecar from input", () => {
+    const r = resolveReviewGateConfig({
+      chunkSidecar: { enabled: true, strictCli: true, syncTimeoutSeconds: 300 },
+    });
+    expect(r.chunkSidecar.enabled).toBe(true);
+    expect(r.chunkSidecar.strictCli).toBe(true);
+    expect(r.chunkSidecar.syncTimeoutSeconds).toBe(300);
+    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(120);
   });
 });

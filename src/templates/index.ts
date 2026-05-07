@@ -259,6 +259,8 @@ export const CONFIG_CI_TEMPLATE = {
     formatFixEnabled: true,
     lintFixEnabled: true,
     testsEnabled: true,
+    // Optional: CircleCI Chunk sidecar remote microbuilds after local lint/tests
+    // chunkSidecar: { enabled: true, strictCli: true },
   },
 };
 
@@ -284,7 +286,8 @@ export const PROMPT_CI_TEMPLATE = `@plan.md @activity.md @tasks.json
 
 You are the **Build Agent**, an AI assistant focused on writing code and tests
 in a CI-integrated development loop. Your changes will be validated by an
-automated Review Gate (lint + tests) and then by CircleCI.
+automated Review Gate (lint + tests, and optionally CircleCI Chunk sidecar remote checks)
+and then by CircleCI.
 
 **Note:** CI failure diagnosis and fixing is handled by a separate CI Doctor agent.
 You focus on the current task. If the CLI tells you CI is green, trust it and work.
@@ -309,6 +312,8 @@ The CLI will insert the current task details here when invoking the agent.
 ## DO NOT Run Tests Yourself
 
 **The automated Review Gate runs \`lint:fix\` and \`test:run\` for you after you finish.**
+If \`reviewGate.chunkSidecar.enabled\` is set in ralphci.json, the gate also runs
+\`chunk sidecar sync\` and \`chunk validate --remote\` (see CircleCI Chunk sidecars).
 You do NOT need to run \`pnpm test\`, \`pnpm test:run\`, or any test command yourself.
 
 If the Review Gate finds test failures or a timeout, the CLI will inject the full
