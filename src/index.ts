@@ -9,13 +9,14 @@ import { run as runMarkdown } from "./commands/run.js";
 import { runJson } from "./commands/run-json.js";
 import { runCI } from "./commands/run-ci.js";
 import { checkCI } from "./commands/check-ci.js";
+import { checkChunk } from "./commands/check-chunk.js";
 
 const program = new Command();
 
 program
   .name("ralphci")
   .description("RalphCI - CI-aware AI coding loops that ship with confidence")
-  .version("1.0.0");
+  .version("1.1.0");
 
 // Register commands
 program
@@ -48,6 +49,35 @@ program
     try {
       await checkCI({
         verbose: options.verbose,
+      });
+    } catch (error) {
+      console.error(
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  });
+
+program
+  .command("check-chunk")
+  .description(
+    "Verify Chunk CLI, auth, validations list, and active sidecar (for reviewGate.chunkSidecar)",
+  )
+  .option(
+    "-w, --working-directory <path>",
+    "Repository root to run Chunk commands in (default: current directory)",
+  )
+  .option("-v, --verbose", "Show extra auth output and stderr details")
+  .option(
+    "--no-brew-install",
+    "Do not run `brew install` when Chunk is missing (for CI or locked-down machines)",
+  )
+  .action((options) => {
+    try {
+      checkChunk({
+        verbose: options.verbose,
+        workingDirectory: options.workingDirectory,
+        brewInstallWhenMissing: options.brewInstall,
       });
     } catch (error) {
       console.error(

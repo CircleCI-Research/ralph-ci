@@ -1,6 +1,6 @@
 {
   "name": "ralphci",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "RalphCI - CI-aware AI coding loops that ship with confidence",
   "main": "dist/index.js",
@@ -8,7 +8,8 @@
     "ralphci": "bin/ralphci"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",

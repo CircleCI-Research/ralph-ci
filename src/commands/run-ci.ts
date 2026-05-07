@@ -2217,6 +2217,19 @@ export async function runCI(
       console.log(
         c.dim(`  Test Timeout: ${reviewGateConfig.testTimeoutSeconds}s`),
       );
+      const ch = reviewGateConfig.chunkSidecar;
+      console.log(
+        c.dim(
+          `  Chunk sidecar: ${ch.enabled ? "enabled (sync + validate --remote)" : "disabled"}`,
+        ),
+      );
+      if (ch.enabled) {
+        console.log(
+          c.dim(
+            `    strict CLI: ${ch.strictCli ? "yes" : "no"} · skip sync: ${ch.skipSync ? "yes" : "no"}`,
+          ),
+        );
+      }
     }
 
     // CI Doctor config (nested under ci)
