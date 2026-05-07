@@ -25,7 +25,7 @@ Traditional AI coding loops have a blind spot: the agent declares victory when l
 - Agent won't declare victory until the **real pipeline is green**
 - Smart push strategy minimizes CI costs while maintaining verification
 
-**Guaranteed CI Awareness**: Unlike prompt-only approaches that rely on the agent to fetch CI status, RalphCI's CLI orchestrates **specialized agents** — a Build Agent for coding, a CI Doctor for failure diagnosis (with full untruncated logs), and a deterministic Review Gate that catches lint/test issues before they ever reach CI.
+**Guaranteed CI awareness:** Unlike prompt-only approaches that rely on the agent to fetch CI status, RalphCI's CLI orchestrates **specialized agents** — a Build Agent for coding, a CI Doctor for failure diagnosis (with full untruncated logs), and a deterministic Review Gate that catches lint/test issues before they ever reach CI. **Optionally**, the Review Gate can also run [CircleCI Chunk](https://circleci.com/blog/chunk-sidecars/) `validate --remote` in a sidecar for CI-parity checks before push ([setup](#optional-circleci-chunk-sidecars)).
 
 The name comes from the "Ralph Loop" concept ([Ralph Wiggum](https://ghuntley.com/ralph/))—run an agent in a loop until tasks are complete. RalphCI extends this with CI awareness.
 
@@ -239,7 +239,7 @@ Create a `ralphci.json` file in your project root or feature directory to config
 - Git push behavior (`git.autoPush`, `git.pushOnLocalSuccess`) is independent of CI. You can auto-push to GitHub even with CI disabled.
 - `git.baseBranch` controls which branch feature branches are created from. Set to `"current"` to branch from wherever you are when you run `ralphci run`, or specify an explicit branch name like `"develop"`. If omitted, auto-detects `main` or `master`.
 
-**Chunk sidecar (optional):** For [CircleCI Chunk sidecars](https://circleci.com/blog/chunk-sidecars/) and microbuilds, install the [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli), run `chunk init` and `chunk auth set circleci` in your repo, create/select a sidecar as in the Chunk docs, then set `reviewGate.chunkSidecar.enabled` to `true` in `ralphci.json`. The Review Gate will run local format/lint/tests first, then sync to the sidecar and run `chunk validate --remote` before push. Requires a paid CircleCI plan with sidecar preview access.
+**Optional remote microbuilds (Chunk):** See [Optional: CircleCI Chunk sidecars](#optional-circleci-chunk-sidecars).
 
 **Example with working directory:**
 
@@ -308,6 +308,26 @@ Branch name:      experiments/no-ci_vs_ci/claude-default/ci-iteration-1__0
 
 **Requirements:** GitHub CLI (`gh`) must be installed and authenticated. If `gh` is not available, branch creation still works but PR creation is skipped.
 
+## Optional: CircleCI Chunk sidecars
+
+The Review Gate can run **[CircleCI Chunk](https://circleci.com/blog/chunk-sidecars/)** after local `format:fix` / `lint:fix` / `test:run`: it syncs your tree to a **sidecar** and runs **`chunk validate --remote`** (microbuilds). That gives Linux / CI-parity signal **before** a push triggers your full pipeline. It is **off by default** and does **not** replace CircleCI on the branch.
+
+|                         |                                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Upstream**            | [Chunk sidecars blog](https://circleci.com/blog/chunk-sidecars/), [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) |
+| **RalphCI**             | `ralphci check-chunk`, `reviewGate.chunkSidecar` in `ralphci.json`                                                          |
+| **Typical requirement** | Paid CircleCI plan with Chunk / sidecar access (see CircleCI docs and changelog)                                            |
+
+**Setup (run in the project you are building — your app repo, not necessarily this `ralph-ci` clone):**
+
+1. **`ralphci check-chunk`** — Verifies the Chunk CLI and auth; on macOS/Linux with Homebrew, installs Chunk automatically unless you pass `--no-brew-install`.
+2. **`chunk auth set circleci`** (and/or env vars Chunk documents, e.g. `CIRCLE_TOKEN`).
+3. **`chunk init`** in that project’s root so `chunk validate --list` shows microbuilds.
+4. **Sidecar** — Create or select one until `chunk sidecar current` is non-empty (`chunk sidecar create`, `chunk sidecar use`, etc.).
+5. **`ralphci.json`** — Set `"reviewGate": { "chunkSidecar": { "enabled": true } }` (add `"strictCli": true` if the remote step must never be skipped when Chunk is missing).
+
+RalphCI does **not** commit Chunk config for you; each consumer repo owns `chunk init` and sidecar lifecycle.
+
 ## Core Concepts
 
 ### Workflow Comparison
@@ -348,7 +368,7 @@ Ralph automates iterative development by having an AI assistant (Claude or Curso
 1. **CI Check** — CLI checks CI status (cached; only hits API after a push)
 2. **CI Doctor** (if CI is red) — Specialized agent diagnoses and fixes CI failure using full untruncated logs
 3. **Build Agent** (if CI is green) — Lighter agent works on task (coding + tests, no CI noise)
-4. **Review Gate** — Deterministic pre-push check: auto `lint:fix` + `test:run` with hard timeout
+4. **Review Gate** — Deterministic pre-push check: `format:fix` + `lint:fix` + `test:run` (timeouts); optionally Chunk `sidecar sync` + `validate --remote` when enabled
 5. **Smart Push** — Only pushes when Review Gate passes
 6. Repeat until all tasks done AND CI green
 7. **Approval gate** for human review before deploy
@@ -359,12 +379,12 @@ Ralph automates iterative development by having an AI assistant (Claude or Curso
 
 RalphCI uses **three specialized components** instead of one monolithic agent:
 
-| Component       | Type                   | Purpose                                                                      |
-| --------------- | ---------------------- | ---------------------------------------------------------------------------- |
-| **Build Agent** | LLM agent              | Writes code and tests. Lighter prompt — no CI failure noise                  |
-| **CI Doctor**   | LLM agent              | Diagnoses and fixes CI failures. Full untruncated logs, purpose-built prompt |
-| **Review Gate** | Deterministic (no LLM) | Pre-push `lint:fix` + `test:run` with hard timeout. Zero token cost          |
-| **CI Cache**    | Utility                | Tracks pushes, skips redundant API calls. Reduces CI queries ~50-70%         |
+| Component       | Type                   | Purpose                                                                                  |
+| --------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
+| **Build Agent** | LLM agent              | Writes code and tests. Lighter prompt — no CI failure noise                              |
+| **CI Doctor**   | LLM agent              | Diagnoses and fixes CI failures. Full untruncated logs, purpose-built prompt             |
+| **Review Gate** | Deterministic (no LLM) | Pre-push format + lint + tests (timeouts); optional Chunk remote validate. Zero LLM cost |
+| **CI Cache**    | Utility                | Tracks pushes, skips redundant API calls. Reduces CI queries ~50-70%                     |
 
 **Why specialize?**
 
@@ -434,10 +454,11 @@ Bad: `WIP`, `fix typo`, `iteration 3 of 10` (incomplete or noise)
 
 ### Key Files
 
-- **plan.md**: JSON task list with descriptions, steps, and pass/fail status
-- **activity.md**: Detailed log of what Claude accomplished each iteration
-- **prompt.md**: Instructions that guide Claude's behavior
-- **spec.md** (optional): Detailed specification/requirements document
+- **tasks.json**: Task list with descriptions, steps, and pass/fail (and `ciVerified` when CI is enabled)
+- **plan.md**: Project plan and context for the agent
+- **activity.md**: Iteration log and CI status (when CI is enabled)
+- **prompt.md**: Build Agent instructions
+- **spec.md** (optional): Detailed specification or requirements
 
 ### Working Directory Pattern
 
@@ -981,7 +1002,7 @@ pnpm link --global
 ```bash
 # Test from anywhere
 cd ~/some-other-project
-ralphci --version            # Should show version
+ralphci --version            # e.g. 1.1.0
 ralphci scaffold             # Should work!
 ```
 
@@ -1018,7 +1039,7 @@ This project uses **pnpm** for faster installs and efficient disk space usage.
 - **Structured Planning**: Clear tasks with pass/fail states
 - **Activity Logging**: Every change documented with verification
 - **Incremental Progress**: One task at a time, git commit per task
-- **Pre-Push Validation**: Review Gate catches lint/test issues before CI (zero token cost)
+- **Pre-Push Validation**: Review Gate catches lint/test issues before CI (zero LLM cost); optional Chunk microbuilds when configured
 - **CI-First**: CI Doctor receives full untruncated logs for any pipeline failure
 - **Cost Tracking**: Token usage tracked per-iteration and cumulatively (Claude runner)
 - **Early Exit**: Completes when AI outputs `<promise>COMPLETE</promise>`
@@ -1048,8 +1069,10 @@ my-project/
 1. Fork the repository
 2. Create a feature branch
 3. Make changes with tests
-4. Run `pnpm test` to verify
+4. Run `pnpm lint:fix && pnpm format:fix && pnpm test:run` before opening a PR
 5. Submit a pull request
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## License
 

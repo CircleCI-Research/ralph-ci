@@ -16,7 +16,7 @@ const program = new Command();
 program
   .name("ralphci")
   .description("RalphCI - CI-aware AI coding loops that ship with confidence")
-  .version("1.0.0");
+  .version("1.1.0");
 
 // Register commands
 program
