@@ -63,11 +63,12 @@ The gap between "local tests pass" and "actually works in CI/production" is wher
 1. **CI Status Check** (cached — only queries API after a push)
 2. If CI is red → **CI Doctor** agent diagnoses and fixes the failure (full untruncated logs)
 3. If CI is green → **Build Agent** works on the current task (lighter, focused prompt)
-4. **Review Gate** validates changes before push (deterministic lint:fix + tests with timeout)
-5. Only pushes when Review Gate passes → **Smart push** triggers CI
-6. Next iteration: cached CI check, repeat
-7. Only complete when ALL tasks done AND CI is green
-8. Approval gate for human review before deploy
+4. **Review Gate** runs after Build Agent signals task progress (`pnpm` format/lint/tests, optional Chunk) — **always when the gate is enabled**, not only when auto-push is on
+5. **Local `git commit`** records each iteration (`feat:`, `fix(ci):`, etc.) after the gate runs, **even when the gate fails**, so history shows every attempt; **`git push`** only when the gate passes and smart-push settings allow it
+6. **Smart push** triggers CI only on those successful pushes
+7. Next iteration: cached CI check, repeat
+8. Only complete when ALL tasks done AND CI is green
+9. Approval gate for human review before deploy
 
 ---
 
@@ -223,15 +224,16 @@ type(scope): description
 
 ### How the Orchestrator Maps Commit Types
 
-| Scenario             | Commit Message                               |
-| -------------------- | -------------------------------------------- |
-| Task completed       | `feat: complete task N - <task description>` |
-| CI fix (CI Doctor)   | `fix(ci): <commit-summary from agent>`       |
-| CI fix (Build Agent) | `fix(ci): <commit-summary from agent>`       |
-| Finalization         | `chore: finalize all tasks`                  |
-| Metrics              | `chore(metrics): save run metrics`           |
+| Scenario                       | Commit Message                                                     |
+| ------------------------------ | ------------------------------------------------------------------ |
+| Task completed                 | `feat: complete task N - <task description>`                       |
+| CI fix (CI Doctor, pipeline)   | `fix(ci): <commit-summary>` + optional `<commit-description>` body |
+| CI fix (CI Doctor, Chunk only) | `fix(ci-sidecar): <commit-summary>` + optional body                |
+| CI fix (Build Agent)           | `fix(ci): <commit-summary from agent>`                             |
+| Finalization                   | `chore: finalize all tasks`                                        |
+| Metrics                        | `chore(metrics): save run metrics`                                 |
 
-The CI Doctor and Build Agent provide the description via a `<commit-summary>` tag; the orchestrator prefixes the appropriate type. See `gitCommitAndPush()` in `src/commands/run-ci.ts`.
+The CI Doctor and Build Agent provide the summary via a `<commit-summary>` tag; both may provide a `<commit-description>` body. Pipeline CI Doctor commits use **`fix(ci):`**; Chunk-only CI Doctor commits use **`fix(ci-sidecar):`**. Each CI Doctor attempt and each **`<promise>success</promise>`** / **`<promise>ci-fix-attempted</promise>`** Build Agent outcome is recorded as a **local git commit** after the Review Gate runs on that attempt (when the gate is enabled); **`git push`** runs only when the gate passes and smart-push settings allow it. See `gitCommit()`, `gitPush()`, and `gitCommitAndPush()` in `src/commands/run-ci.ts`.
 
 ### When Is a Commit Worthy?
 
@@ -272,8 +274,10 @@ ralphci check-ci           # Check CIRCLE_TOKEN and API connection
 ralphci check-ci -v        # Verbose (shows token prefix)
 ralphci check-chunk        # Chunk CLI + auth + sidecar (for reviewGate.chunkSidecar)
 ralphci check-chunk -v     # Verbose Chunk diagnostics
+ralphci check-chunk --upgrade-chunk  # brew upgrade + chunk upgrade (latest Chunk CLI)
 ralphci check-chunk --no-brew-install  # Do not auto `brew install` when Chunk is missing
 # Product context (CircleCI CTO Rob Zuber): https://circleci.com/blog/chunk-sidecars/
+# Chunk ops (SSH key, workdir, sidecar EOF, sidecar bootstrap): docs/CHUNK_SIDECARS.md
 
 # Primary workflow (CI enabled by default)
 ralphci scaffold           # Create workflow files (CI enabled)
@@ -293,8 +297,8 @@ ralphci run-json -m 10     # Run JSON workflow
 ## Run Command Options
 
 ```bash
-ralphci run -m 10                             # Default: 10 iterations, CI enabled, smart push, approval gate
-ralphci run --no-ci -m 10                     # Disable CI integration (local-only)
+ralphci run -m 101                            # Default: 101 iterations, CI enabled, smart push, approval gate
+ralphci run --no-ci -m 101                    # Disable CI integration (local-only)
 ralphci run --unlimited                       # No iteration limit (use with caution)
 ralphci run --push-every-commit               # Chatty mode (not recommended)
 ralphci run --no-approval-gate                # Auto-deploy when CI green

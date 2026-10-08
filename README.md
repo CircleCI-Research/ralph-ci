@@ -29,7 +29,7 @@ Traditional AI coding loops have a blind spot: the agent declares victory when l
 
 The name comes from the "Ralph Loop" concept ([Ralph Wiggum](https://ghuntley.com/ralph/))—run an agent in a loop until tasks are complete. RalphCI extends this with CI awareness.
 
-For controlled experiments on the same question (local green vs. pipeline green), see the CircleCI Loop Lab article [_We Let an AI Agent Say 'I Passed.' Was It Actually Good?_](https://loop.circleci.com/we-let-an-ai-agent-say-i-passed-was-it-actually-good).
+For controlled experiments on the same question (local green vs. pipeline green), see the CircleCI Loop Lab article [_We Let an AI Agent Say 'I Passed.' Was It Actually Good?_](https://loop.circleci.com/we-let-an-ai-agent-say-i-passed-was-it-actually-good). The playable Snake builds from that work, the early-May sidecar runs, and the Cost of a Green PR calibrations live under [`experiments/`](experiments/).
 
 ## Quick Start
 
@@ -86,8 +86,8 @@ Result: 3 iterations = 1 CI run (not 3). Saves time and CI costs.
 **Configuration options:**
 
 ```bash
-ralphci run -m 10                       # Default: 10 iterations, CI enabled, smart push, approval gate
-ralphci run -m 10 --no-ci               # Disable CI integration (local-only workflow)
+ralphci run -m 101                      # Default: 101 iterations, CI enabled, smart push, approval gate
+ralphci run -m 101 --no-ci              # Disable CI integration (local-only workflow)
 ralphci run --unlimited                 # No iteration limit (use with caution)
 ralphci run --push-every-commit         # Chatty mode: push every commit (not recommended)
 ralphci run --no-approval-gate          # Auto-deploy when CI green (full CD)
@@ -202,28 +202,31 @@ Create a `ralphci.json` file in your project root or feature directory to config
 
 **Configuration Options:**
 
-| Field                                                  | Type                              | Default              | Description                                                                                                                                              |
-| ------------------------------------------------------ | --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runner`                                               | `"claude"` \| `"cursor"`          | `"claude"`           | Which AI CLI to use                                                                                                                                      |
-| `model`                                                | `string`                          | —                    | Model to use (e.g. `"claude-opus-4-6"` for Claude, `"composer-1"` for Cursor)                                                                            |
-| `uniqueId`                                             | `string`                          | —                    | Unique ID for auto-branch and PR creation (see [Auto Branch & PR](#auto-branch--pr))                                                                     |
-| `taskSelection`                                        | `"first-incomplete"` \| `"smart"` | `"first-incomplete"` | Task selection strategy                                                                                                                                  |
-| `git.autoPush`                                         | `boolean`                         | `true`               | Auto-push commits to remote (independent of CI)                                                                                                          |
-| `git.pushOnLocalSuccess`                               | `boolean`                         | `true`               | Only push when local tests pass (smart push)                                                                                                             |
-| `git.baseBranch`                                       | `string`                          | —                    | Base branch for feature branches. `"current"` = branch at run start. Default: auto-detect `main`/`master`                                                |
-| `reviewGate.enabled`                                   | `boolean`                         | `true`               | Enable pre-push quality gate (lint:fix + tests)                                                                                                          |
-| `reviewGate.testTimeoutSeconds`                        | `number`                          | `60`                 | Hard timeout for test:run (prevents hanging)                                                                                                             |
-| `reviewGate.lintFixEnabled`                            | `boolean`                         | `true`               | Auto-run lint:fix before push                                                                                                                            |
-| `reviewGate.testsEnabled`                              | `boolean`                         | `true`               | Run tests as part of Review Gate                                                                                                                         |
-| `reviewGate.chunkSidecar.enabled`                      | `boolean`                         | `false`              | After local format/lint/tests pass, run `chunk sidecar sync` and `chunk validate --remote` ([Chunk sidecars](https://circleci.com/blog/chunk-sidecars/)) |
-| `reviewGate.chunkSidecar.strictCli`                    | `boolean`                         | `false`              | If true, Review Gate fails when the Chunk CLI is missing; if false, remote step is skipped with a log line                                               |
-| `reviewGate.chunkSidecar.skipSync`                     | `boolean`                         | `false`              | Only run `chunk validate --remote` (no `chunk sidecar sync`)                                                                                             |
-| `reviewGate.chunkSidecar.syncTimeoutSeconds`           | `number`                          | `180`                | Hard timeout for `chunk sidecar sync`                                                                                                                    |
-| `reviewGate.chunkSidecar.remoteValidateTimeoutSeconds` | `number`                          | `120`                | Hard timeout for `chunk validate --remote`                                                                                                               |
-| `reviewGate.chunkSidecar.validateTarget`               | `string`                          | —                    | Optional microbuild name: `chunk validate <name> --remote`                                                                                               |
-| `ci.doctor.enabled`                                    | `boolean`                         | `true`               | Enable CI Doctor agent for failure diagnosis                                                                                                             |
-| `ci.doctor.maxLogLength`                               | `number`                          | `0`                  | Max log chars (0 = unlimited — full logs for CI Doctor)                                                                                                  |
-| `ci.doctor.model`                                      | `string`                          | —                    | Model override for CI Doctor (defaults to main model)                                                                                                    |
+| Field                                                  | Type                              | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runner`                                               | `"claude"` \| `"cursor"`          | `"claude"`           | Which AI CLI to use                                                                                                                                                                                                                                                                                                                                                                                            |
+| `model`                                                | `string`                          | —                    | Model to use (e.g. `"claude-opus-4-6"` for Claude, `"composer-1"` for Cursor)                                                                                                                                                                                                                                                                                                                                  |
+| `uniqueId`                                             | `string`                          | —                    | Unique ID for auto-branch and PR creation (see [Auto Branch & PR](#auto-branch--pr))                                                                                                                                                                                                                                                                                                                           |
+| `taskSelection`                                        | `"first-incomplete"` \| `"smart"` | `"first-incomplete"` | Task selection strategy                                                                                                                                                                                                                                                                                                                                                                                        |
+| `git.autoPush`                                         | `boolean`                         | `true`               | Auto-push commits to remote (independent of CI)                                                                                                                                                                                                                                                                                                                                                                |
+| `git.pushOnLocalSuccess`                               | `boolean`                         | `true`               | Only push when local tests pass (smart push)                                                                                                                                                                                                                                                                                                                                                                   |
+| `git.baseBranch`                                       | `string`                          | —                    | Base branch for feature branches. `"current"` = branch at run start. Default: auto-detect `main`/`master`                                                                                                                                                                                                                                                                                                      |
+| `reviewGate.enabled`                                   | `boolean`                         | `true`               | Enable pre-push quality gate (lint:fix + tests)                                                                                                                                                                                                                                                                                                                                                                |
+| `reviewGate.testTimeoutSeconds`                        | `number`                          | `60`                 | Hard timeout for test:run (prevents hanging)                                                                                                                                                                                                                                                                                                                                                                   |
+| `reviewGate.lintFixEnabled`                            | `boolean`                         | `true`               | Auto-run lint:fix before push                                                                                                                                                                                                                                                                                                                                                                                  |
+| `reviewGate.testsEnabled`                              | `boolean`                         | `true`               | Run tests as part of Review Gate                                                                                                                                                                                                                                                                                                                                                                               |
+| `reviewGate.chunkSidecar.enabled`                      | `boolean`                         | `false`              | After local format/lint/tests pass, run Chunk remote validation (`chunk validate --remote`; workspace upload uses `syncMode`) ([Chunk sidecars](https://circleci.com/blog/chunk-sidecars/))                                                                                                                                                                                                                    |
+| `reviewGate.chunkSidecar.syncMode`                     | `string`                          | `"chunk-cli"`        | **`chunk-cli`** uses `chunk sidecar sync` (idiomatic per [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli)). **`tar-ssh`** uploads a gzipped tar over the CircleCI sidecar **WebSocket + SSH** tunnel (see [docs/CHUNK_SIDECARS.md](docs/CHUNK_SIDECARS.md#tar-ssh-workspace-upload-websocket--ssh)); not by piping stdin into `chunk sidecar ssh`. Use for unpushed/dirty trees without `origin` refs |
+| `reviewGate.chunkSidecar.strictCli`                    | `boolean`                         | `false`              | If true, Review Gate fails when the Chunk CLI is missing; if false, remote step is skipped with a log line                                                                                                                                                                                                                                                                                                     |
+| `reviewGate.chunkSidecar.skipSync`                     | `boolean`                         | `false`              | Only run `chunk validate --remote` (no workspace upload / no `chunk sidecar sync`)                                                                                                                                                                                                                                                                                                                             |
+| `reviewGate.chunkSidecar.syncTimeoutSeconds`           | `number`                          | `180`                | Hard timeout for workspace upload (`chunk sidecar sync` or **`tar-ssh`** tunnel + tar stream)                                                                                                                                                                                                                                                                                                                  |
+| `reviewGate.chunkSidecar.remoteValidateTimeoutSeconds` | `number`                          | `300`                | Hard timeout for `chunk validate --remote`                                                                                                                                                                                                                                                                                                                                                                     |
+| `reviewGate.chunkSidecar.validateTarget`               | `string`                          | —                    | Optional microbuild name: `chunk validate <name> --remote`                                                                                                                                                                                                                                                                                                                                                     |
+| `reviewGate.chunkSidecar.remoteWorkdir`                | `string`                          | auto                 | Sidecar path for the project tree + validate; default `./workspace/<basename(package root)>`                                                                                                                                                                                                                                                                                                                   |
+| `ci.doctor.enabled`                                    | `boolean`                         | `true`               | Enable CI Doctor agent for failure diagnosis                                                                                                                                                                                                                                                                                                                                                                   |
+| `ci.doctor.logMode`                                    | `"full"` \| `"failure-report"`    | `"full"`             | **full**: unshaped REST job logs (baseline). **failure-report**: `circleci run get --failure-report`. Does not fall back to full logs if the CLI fails.                                                                                                                                                                                                                                                        |
+| `ci.doctor.maxLogLength`                               | `number`                          | `0`                  | Max log chars for `logMode: "full"` (0 = unlimited)                                                                                                                                                                                                                                                                                                                                                            |
+| `ci.doctor.model`                                      | `string`                          | —                    | Model override for CI Doctor (defaults to main model)                                                                                                                                                                                                                                                                                                                                                          |
 
 **Task Selection Modes:**
 
@@ -316,6 +319,8 @@ Longer context for users and contributors: [docs/CHUNK_SIDECARS.md](docs/CHUNK_S
 
 The Review Gate can run **[Chunk](https://github.com/CircleCI-Public/chunk-cli)** after local `format:fix` / `lint:fix` / `test:run`: it syncs your tree to a **sidecar** and runs **`chunk validate --remote`** (microbuilds). That gives Linux / CI-parity signal **before** a push triggers your full pipeline. It is **off by default** and does **not** replace CircleCI on the branch.
 
+In **this** repository, **`.chunk/config.json`** runs **install**, **lint**, **test**, and **build** through **`scripts/chunk-remote-env.sh`**, matching the CircleCI `lint`, `test`, and `build` jobs.
+
 |                         |                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Upstream**            | [**Rob Zuber — Introducing Chunk sidecars**](https://circleci.com/blog/chunk-sidecars/), [Chunk CLI](https://github.com/CircleCI-Public/chunk-cli) |
@@ -324,11 +329,35 @@ The Review Gate can run **[Chunk](https://github.com/CircleCI-Public/chunk-cli)*
 
 **Setup (run in the project you are building — your app repo, not necessarily this `ralph-ci` clone):**
 
-1. **`ralphci check-chunk`** — Verifies the Chunk CLI and auth; on macOS/Linux with Homebrew, installs Chunk automatically unless you pass `--no-brew-install`.
-2. **`chunk auth set circleci`** (and/or env vars Chunk documents, e.g. `CIRCLE_TOKEN`).
-3. **`chunk init`** in that project’s root so `chunk validate --list` shows microbuilds.
-4. **Sidecar** — Create or select one until `chunk sidecar current` is non-empty (`chunk sidecar create`, `chunk sidecar use`, etc.).
-5. **`ralphci.json`** — Set `"reviewGate": { "chunkSidecar": { "enabled": true } }` (add `"strictCli": true` if the remote step must never be skipped when Chunk is missing).
+1. **`ralphci check-chunk`** — Verifies the Chunk CLI and auth; on macOS/Linux with Homebrew, installs Chunk automatically unless you pass `--no-brew-install`. Use **`ralphci check-chunk --upgrade-chunk`** to run **`brew upgrade CircleCI-Public/circleci/chunk`** then **`chunk upgrade`** so you stay on the latest release ([Chunk CLI README](https://github.com/CircleCI-Public/chunk-cli)).
+2. **`chunk auth set circleci`** (and/or env vars Chunk documents, e.g. `CIRCLE_TOKEN`). For **`syncMode: tar-ssh`**, **`CIRCLE_TOKEN`** must also be available to the Review Gate process (RalphCI calls CircleCI **`…/ssh/add-key`** before opening the tunnel).
+3. **`chunk init`** in that project’s root (writes `.chunk/config.json`). The `chunk validate --list` step inside `ralphci check-chunk` can **hang or print nothing** in some headless environments; it is optional for readiness — focus on **`chunk sidecar current`** and a real **`chunk validate --remote`** smoke test.
+4. **SSH key for the sidecar** — Chunk expects an identity at **`~/.ssh/chunk_ai`** by default (or pass **`--identity-file`**). Generate a key if needed, then register the public key with the **active** sidecar after every **new** sidecar:
+   - `ssh-keygen -t ed25519 -f ~/.ssh/chunk_ai -N ""`
+   - `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub`
+5. **Sidecar** — Create or select one until `chunk sidecar current` is non-empty. Non-interactive create: `chunk sidecar create --name <name> --org-id <uuid>` (resolve org id from CircleCI API or the CircleCI app; TTY prompts fail in scripts).
+6. **`ralphci.json`** — Set `"reviewGate": { "chunkSidecar": { "enabled": true } }` (add `"strictCli": true` if the remote step must never be skipped when Chunk is missing).
+
+**Recommended manual smoke test (from the same directory as `package.json`):**
+
+```bash
+chunk sidecar sync --workdir "./workspace/$(basename "$PWD")"
+chunk validate --remote --workdir "./workspace/$(basename "$PWD")"
+```
+
+RalphCI’s Review Gate passes the same **`--workdir`** pattern by default (`./workspace/<basename(package root)>`), so `ralphci run` does not require you to remember this.
+
+### Chunk troubleshooting (field notes)
+
+| Symptom                                                                                  | Likely cause                                                                                                              | What to do                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cd: can't cd to ./workspace` on validate                                                | Default validate cwd is `./workspace`, but **`chunk sidecar sync`** puts the repo in **`./workspace/<repo-folder-name>`** | Use **`--workdir`** as in the smoke test above, or use RalphCI (it passes `--workdir` for you). Optionally set **`reviewGate.chunkSidecar.remoteWorkdir`** in `ralphci.json`.                                                                                                                                                                                |
+| `pnpm: not found` / `npm: not found` / `corepack: not found` on the sidecar              | Sidecar image is minimal; often **no** Node toolchain on `PATH`                                                           | In **this** repo, `.chunk/config.json` runs **`scripts/chunk-remote-env.sh`** before `pnpm` (Linux: downloads Node 20.18.1 under **`.chunk-node/`**, then `npm install -g pnpm@9.15.6`). **Corepack `pnpm prepare` failed** with a signature error on our sidecar — the script uses **npm global pnpm** instead. Copy or adapt that pattern for other repos. |
+| `ssh key not found: .../chunk_ai`                                                        | No default identity                                                                                                       | Create **`~/.ssh/chunk_ai`** (or pass **`--identity-file`**) and **`chunk sidecar add-ssh-key`**.                                                                                                                                                                                                                                                            |
+| `ssh: handshake failed` / `read frame header: EOF`                                       | Sidecar **VM recycled** or session dropped                                                                                | **`chunk sidecar create`** (new instance), **`chunk sidecar add-ssh-key`** again, then **`chunk sidecar sync`** and retry validate.                                                                                                                                                                                                                          |
+| `gzip: stdin: unexpected end of file` / `EPIPE` when piping tar into `chunk sidecar ssh` | Chunk’s non-interactive **`sidecar ssh`** does not forward stdin to remote **`exec`**                                     | Use **`syncMode: tar-ssh`** in RalphCI or **`chunk-cli`** sync; see [docs/CHUNK_SIDECARS.md](docs/CHUNK_SIDECARS.md#why-not-use-chunk-sidecar-ssh-for-the-tarball)                                                                                                                                                                                           |
+
+**This repository:** `package.json` includes **`packageManager`** for pnpm; **`.gitignore`** excludes **`.chunk-node/`** (remote bootstrap cache). See **`scripts/chunk-remote-env.sh`** for the Linux sidecar bootstrap.
 
 RalphCI does **not** commit Chunk config for you; each consumer repo owns `chunk init` and sidecar lifecycle.
 
@@ -539,7 +568,7 @@ If Chunk is not installed and **Homebrew is on PATH** (macOS or Linux), `check-c
 
 1. `chunk` is installed and responds to `--version`
 2. `chunk auth status` succeeds (CircleCI auth via Chunk)
-3. `chunk validate --list` (warns if the project is not initialized with `chunk init`)
+3. `chunk validate --list` (best-effort; may hang or stay empty in headless shells — not required if `validate --remote` works)
 4. `chunk sidecar current` (warns if no active sidecar — required before `chunk validate --remote` in the Review Gate)
 
 ### `ralphci scaffold`
@@ -877,23 +906,25 @@ Edit `prompt.md` to add project-specific guidance:
 
 ## Choosing max-iterations
 
-Formula: `max-iterations = number_of_tasks + buffer`
+**Default is 101.** That covers task work plus CI Doctor / Review Gate retries without dying mid-green-wait on expensive Opus runs.
+
+Formula if you override: `max-iterations = number_of_tasks + CI/retry buffer`
 
 Examples:
 
-- 5 tasks → use `-m 8` (5 + 3 buffer)
-- 10 tasks → use `-m 13` (10 + 3 buffer)
-- 20 tasks → use `-m 25` (20 + 5 buffer)
+- Local-only smoke: `-m 15`
+- Full CI + sidecar experiments: keep the default (`101`) or pass `-m 101` explicitly
+- Short demos only: `-m 10` (not for AFK / sealed replicates)
 
-**Why a buffer?**
+**Why a large buffer?**
 
-- Tests might fail and need fixing
-- Build errors need resolution
-- Tasks might be more complex than anticipated
+- Outer CI can take multiple Doctor cycles after all tasks pass locally
+- Sidecar Review Gate retries and format/lint fix loops count as iterations
+- Burning a cheap early stop on a $15–20 run is worse than unused headroom
 
-**Cost:** Typically $0.05-$0.15 per iteration depending on context size.
+**Cost:** Typically $0.05-$0.15 per iteration depending on context size — but agent turns dominate on Opus.
 
-**Tip:** Start conservative and run again if needed. Progress is saved.
+**Tip:** Progress is saved in `tasks.json` / `activity.md`. Prefer finishing in one run over restarting with a higher `-m`.
 
 ```bash
 ralphci run -m 5    # Run 5 iterations
@@ -1031,7 +1062,7 @@ pnpm test                        # Run all tests
 pnpm run test:watch              # Watch mode
 ```
 
-Test coverage: 387 tests across 24 test files covering file operations, commands, utilities, review gate, Chunk CLI, CI cache, and configuration.
+Test coverage: 389 tests across 24 test files covering file operations, commands, utilities, review gate, Chunk CLI, CI cache, and configuration.
 
 ## Package Manager
 

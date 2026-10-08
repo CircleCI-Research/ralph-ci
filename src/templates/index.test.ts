@@ -62,7 +62,7 @@ describe("JSON workflow templates", () => {
 
 describe("CI-aware prompt templates", () => {
   it("PROMPT_CI_TEMPLATE should tell agent not to commit", () => {
-    expect(PROMPT_CI_TEMPLATE).toContain("Do NOT create git commits or push");
+    expect(PROMPT_CI_TEMPLATE).toContain("orchestrator handles git");
     expect(PROMPT_CI_TEMPLATE).not.toContain("Make one git commit");
   });
 
@@ -74,9 +74,7 @@ describe("CI-aware prompt templates", () => {
   });
 
   it("PROMPT_CI_DOCTOR_TEMPLATE should tell agent not to commit", () => {
-    expect(PROMPT_CI_DOCTOR_TEMPLATE).toContain(
-      "Do NOT create git commits or push",
-    );
+    expect(PROMPT_CI_DOCTOR_TEMPLATE).toContain("orchestrator handles git");
     expect(PROMPT_CI_DOCTOR_TEMPLATE).not.toContain("Make one git commit");
   });
 

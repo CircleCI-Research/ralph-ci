@@ -57,7 +57,7 @@ export class DefaultClaudeRunner implements AgentRunner {
       promptContent: providedContent,
       workingDirectory,
       model,
-      timeoutMinutes = 10,
+      timeoutMinutes = 30,
       verbose = true,
     } = options;
 

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   fetchCIStatus,
+  fetchFailureContext,
   parseProjectSlug,
   pollUntilSettled,
+  type CIStatus,
 } from "./circleci-api.js";
 
 // Store the original fetch so we can restore it
@@ -335,5 +337,70 @@ describe("pollUntilSettled", () => {
     const onPoll = vi.fn();
     await pollUntilSettled("gh/org/repo", "main", 30_000, "fake-token", onPoll);
     expect(onPoll).toHaveBeenCalled();
+  });
+});
+
+describe("fetchFailureContext", () => {
+  const failed: CIStatus = {
+    status: "failed",
+    branch: "experiments/cost-of-a-green-pr/runs/control/001__x",
+    pipelineNumber: 42,
+    failedJobs: [{ name: "release-attestation", jobNumber: 9 }],
+  };
+
+  it("returns none when the pipeline is not failed", async () => {
+    const ctx = await fetchFailureContext(
+      "gh/CircleCI-Research/ralph-ci",
+      { status: "success", branch: "main" },
+      { logMode: "full" },
+    );
+    expect(ctx.source).toBe("none");
+    expect(ctx.logs).toBeNull();
+    expect(ctx.failureContextChars).toBe(0);
+  });
+
+  it("uses the failure-report runner and records char count", async () => {
+    const report = "condensed: Missing FAT-LOG.md";
+    const ctx = await fetchFailureContext(
+      "gh/CircleCI-Research/ralph-ci",
+      failed,
+      {
+        logMode: "failure-report",
+        runFailureReport: async () => report,
+      },
+    );
+    expect(ctx.source).toBe("failure-report");
+    expect(ctx.logs).toBe(report);
+    expect(ctx.failureContextChars).toBe(report.length);
+    expect(ctx.logMode).toBe("failure-report");
+  });
+
+  it("does not fall back to full logs when the CLI fails", async () => {
+    const ctx = await fetchFailureContext(
+      "gh/CircleCI-Research/ralph-ci",
+      failed,
+      {
+        logMode: "failure-report",
+        runFailureReport: async () => {
+          throw new Error("circleci: command not found");
+        },
+      },
+    );
+    expect(ctx.source).toBe("failure-report-error");
+    expect(ctx.logs).toContain("command not found");
+    expect(ctx.logs).not.toContain("npm WARN");
+  });
+
+  it("errors when failure-report is selected but branch is missing", async () => {
+    const ctx = await fetchFailureContext(
+      "gh/CircleCI-Research/ralph-ci",
+      { status: "failed", failedJobs: [{ name: "lint", jobNumber: 1 }] },
+      {
+        logMode: "failure-report",
+        runFailureReport: async () => "should not run",
+      },
+    );
+    expect(ctx.source).toBe("failure-report-error");
+    expect(ctx.logs).toContain("no branch");
   });
 });

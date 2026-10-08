@@ -15,12 +15,15 @@ export class CIQueryCache {
   private queryCount: number = 0;
   private cacheHitCount: number = 0;
   private fixedPipelineNumbers: Set<number> = new Set();
+  /** CI Doctor invocations per {@link computeCIFailureFingerprint} (cleared on push). */
+  private doctorInvocationsByFingerprint: Map<string, number> = new Map();
 
   /**
    * Record that a push just happened. This invalidates the cache.
    */
   recordPush(): void {
     this.lastPushTimestamp = Date.now();
+    this.doctorInvocationsByFingerprint.clear();
   }
 
   /**
@@ -86,6 +89,33 @@ export class CIQueryCache {
    */
   invalidate(): void {
     this.cachedStatus = null;
+    this.doctorInvocationsByFingerprint.clear();
+  }
+
+  /**
+   * How many times CI Doctor has completed a run for this failure fingerprint
+   * in the current session (since last {@link recordPush}).
+   */
+  getDoctorInvocationsForFingerprint(fingerprint: string): number {
+    return this.doctorInvocationsByFingerprint.get(fingerprint) ?? 0;
+  }
+
+  /**
+   * True when CI Doctor should not run again for this fingerprint until after a push.
+   */
+  shouldSkipDoctorForFingerprint(
+    fingerprint: string,
+    maxInvocations: number,
+  ): boolean {
+    return (
+      this.getDoctorInvocationsForFingerprint(fingerprint) >= maxInvocations
+    );
+  }
+
+  /** Call once after each successful CI Doctor invocation for this fingerprint. */
+  recordDoctorInvocationForFingerprint(fingerprint: string): void {
+    const n = this.doctorInvocationsByFingerprint.get(fingerprint) ?? 0;
+    this.doctorInvocationsByFingerprint.set(fingerprint, n + 1);
   }
 
   /**

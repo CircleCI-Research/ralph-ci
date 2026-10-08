@@ -1,0 +1,137 @@
+{
+  "startTime": "2026-05-18T18:33:04.244Z",
+  "endTime": "2026-05-18T19:09:21.118Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-18T18:35:18.660Z",
+      "ciStatusAtStart": "not_run",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Create basic HTML structure and implement createInitialSnake",
+      "ciFailureFixed": false,
+      "outcome": "review-gate-failed",
+      "tokensUsed": 7494,
+      "costUsd": 0.9638172500000002,
+      "durationMs": 134332
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-05-18T18:38:05.746Z",
+      "ciStatusAtStart": "not_run",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "[CI Doctor] Fix Chunk sidecar (validate --remote) failure",
+      "ciFailureFixed": true,
+      "outcome": "ci-fix-attempted",
+      "tokensUsed": 3159,
+      "costUsd": 0.34673025,
+      "durationMs": 0
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-05-18T18:40:02.236Z",
+      "ciStatusAtStart": "not_run",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "[CI Doctor] Fix Chunk sidecar (validate --remote) failure",
+      "ciFailureFixed": true,
+      "outcome": "ci-fix-attempted",
+      "tokensUsed": 2835,
+      "costUsd": 0.311131,
+      "durationMs": 0
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-05-18T18:44:27.475Z",
+      "ciStatusAtStart": "not_run",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "[CI Doctor] Fix Chunk sidecar (validate --remote) failure",
+      "ciFailureFixed": true,
+      "outcome": "ci-fix-attempted",
+      "tokensUsed": 11393,
+      "costUsd": 1.1667007499999997,
+      "durationMs": 0
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-05-18T18:45:52.618Z",
+      "ciStatusAtStart": "running",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Style the game with retro aesthetic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 4815,
+      "costUsd": 0.44461599999999996,
+      "durationMs": 85084
+    },
+    {
+      "iteration": 6,
+      "timestamp": "2026-05-18T18:51:02.390Z",
+      "ciStatusAtStart": "success",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Set up test infrastructure and write initial failing tests",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 18375,
+      "costUsd": 1.3462757500000002,
+      "durationMs": 254474
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-05-18T18:54:50.090Z",
+      "ciStatusAtStart": "success",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement snake movement and rendering",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 10289,
+      "costUsd": 1.0769467499999998,
+      "durationMs": 165935
+    },
+    {
+      "iteration": 8,
+      "timestamp": "2026-05-18T18:59:59.172Z",
+      "ciStatusAtStart": "success",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement food spawning and collision detection",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 17774,
+      "costUsd": 1.1996125000000002,
+      "durationMs": 253127
+    },
+    {
+      "iteration": 9,
+      "timestamp": "2026-05-18T19:02:59.573Z",
+      "ciStatusAtStart": "success",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Implement game over logic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 7628,
+      "costUsd": 0.6701875,
+      "durationMs": 123039
+    },
+    {
+      "iteration": 10,
+      "timestamp": "2026-05-18T19:07:26.514Z",
+      "ciStatusAtStart": "success",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Add restart functionality and final polish",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 13178,
+      "costUsd": 1.02956325,
+      "durationMs": 209114
+    }
+  ],
+  "summary": {
+    "totalIterations": 11,
+    "totalTokens": 96940,
+    "totalCost": 8.555581,
+    "ciQueriesTotal": 7,
+    "ciFailuresEncountered": 3,
+    "ciFailuresFixed": 3,
+    "tasksCompleted": 7,
+    "timeToFirstCIGreen": null,
+    "totalDurationMs": 2176874
+  }
+}

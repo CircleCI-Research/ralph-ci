@@ -60,6 +60,37 @@ describe("checkChunk", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  it("runs brew upgrade and chunk upgrade when upgradeChunk is true", () => {
+    const calls: string[] = [];
+    vi.mocked(execFileSync).mockImplementation(
+      (file: string, args: readonly string[]) => {
+        calls.push(`${file} ${args.join(" ")}`);
+        if (file === "chunk" && args[0] === "--version") {
+          return "chunk v9.9.9\n";
+        }
+        if (file === "brew" && args[0] === "--version") return "Homebrew 4\n";
+        if (file === "brew" && args[0] === "upgrade") return "";
+        if (file === "chunk" && args[0] === "upgrade") return "upgraded\n";
+        if (file === "chunk" && args[0] === "auth") return "ok\n";
+        if (file === "chunk" && args[0] === "validate") return "tests\n";
+        if (file === "chunk" && args[0] === "sidecar") return "sc-1\n";
+        return "";
+      },
+    );
+
+    expect(() =>
+      checkChunk({
+        workingDirectory: "/tmp/ralph-chunk-test",
+        upgradeChunk: true,
+      }),
+    ).not.toThrow();
+
+    expect(calls.some((c) => c === "chunk upgrade")).toBe(true);
+    if (process.platform === "darwin" || process.platform === "linux") {
+      expect(calls.some((c) => c.startsWith("brew upgrade"))).toBe(true);
+    }
+  });
+
   it("completes without exit when cli, auth, list, and sidecar succeed", () => {
     vi.mocked(execFileSync).mockImplementation(
       (file: string, args: readonly string[]) => {
@@ -77,6 +108,39 @@ describe("checkChunk", () => {
       checkChunk({ workingDirectory: "/tmp/ralph-chunk-test" }),
     ).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("exits 1 when active sidecar is out of date", () => {
+    vi.mocked(execFileSync).mockImplementation(
+      (file: string, args: readonly string[]) => {
+        if (file === "chunk" && args[0] === "--version")
+          return "chunk v0.0.1-test\n";
+        if (file === "chunk" && args[0] === "auth") return "circleci\n";
+        if (file === "chunk" && args[0] === "validate") return "tests\n";
+        if (
+          file === "chunk" &&
+          args[0] === "sidecar" &&
+          args[1] === "current"
+        ) {
+          return "ralph-ci-chunk-gate-2\n";
+        }
+        if (file === "chunk" && args[0] === "sidecar" && args[1] === "exec") {
+          const err = new Error("failed") as Error & {
+            stderr?: string;
+            stdout?: string;
+          };
+          err.stderr = "✗ Error: This sidecar is out of date.";
+          throw err;
+        }
+        if (file === "chunk" && args[0] === "sidecar") return "sc\n";
+        return "";
+      },
+    );
+
+    expect(() =>
+      checkChunk({ workingDirectory: "/tmp/ralph-chunk-test" }),
+    ).toThrow("EXIT_1");
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("does not exit when validate --list fails (warning only)", () => {

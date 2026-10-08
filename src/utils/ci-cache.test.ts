@@ -104,9 +104,11 @@ describe("CIQueryCache", () => {
       const status = makeStatus("failed", 10);
       cache.cacheResult(status);
       expect(cache.getCached()).toBe(status);
+      cache.recordDoctorInvocationForFingerprint("fp1");
       cache.invalidate();
       expect(cache.getCached()).toBeNull();
       expect(cache.needsQuery()).toBe(true);
+      expect(cache.getDoctorInvocationsForFingerprint("fp1")).toBe(0);
     });
   });
 
@@ -135,6 +137,28 @@ describe("CIQueryCache", () => {
       expect(cache.getCached()).toBeNull();
       expect(cache.needsQuery()).toBe(true);
       expect(cache.isAlreadyFixed(1015)).toBe(true);
+    });
+  });
+
+  describe("CI Doctor fingerprint dedupe", () => {
+    it("tracks invocations per fingerprint", () => {
+      const cache = new CIQueryCache();
+      const fp = "deadbeef";
+      expect(cache.getDoctorInvocationsForFingerprint(fp)).toBe(0);
+      expect(cache.shouldSkipDoctorForFingerprint(fp, 1)).toBe(false);
+      cache.recordDoctorInvocationForFingerprint(fp);
+      expect(cache.getDoctorInvocationsForFingerprint(fp)).toBe(1);
+      expect(cache.shouldSkipDoctorForFingerprint(fp, 1)).toBe(true);
+      expect(cache.shouldSkipDoctorForFingerprint(fp, 2)).toBe(false);
+    });
+
+    it("clears fingerprint counts on recordPush", () => {
+      const cache = new CIQueryCache();
+      const fp = "abc";
+      cache.recordDoctorInvocationForFingerprint(fp);
+      vi.advanceTimersByTime(1);
+      cache.recordPush();
+      expect(cache.getDoctorInvocationsForFingerprint(fp)).toBe(0);
     });
   });
 });

@@ -1,0 +1,183 @@
+{
+  "startTime": "2026-09-02T06:18:30.309Z",
+  "endTime": "2026-09-02T07:15:14.213Z",
+  "iterations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-09-02T06:23:33.866Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Create basic HTML structure and implement createInitialSnake",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 16269,
+      "tokensIn": 70,
+      "tokensOut": 16199,
+      "cacheReadTokens": 1859884,
+      "costUsd": 1.6763044999999999,
+      "durationMs": 303493,
+      "wallClockMs": 303493,
+      "stepTimings": {
+        "buildAgentMs": 303493,
+        "reviewGateMs": 71648
+      }
+    },
+    {
+      "iteration": 2,
+      "timestamp": "2026-09-02T06:27:42.160Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Style the game with retro aesthetic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 8857,
+      "tokensIn": 56,
+      "tokensOut": 8801,
+      "cacheReadTokens": 1140794,
+      "costUsd": 1.0114207499999999,
+      "durationMs": 176188,
+      "wallClockMs": 176188,
+      "stepTimings": {
+        "buildAgentMs": 176188,
+        "reviewGateMs": 68795
+      }
+    },
+    {
+      "iteration": 3,
+      "timestamp": "2026-09-02T06:33:46.865Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Set up test infrastructure and write initial failing tests",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 14870,
+      "tokensIn": 46,
+      "tokensOut": 14824,
+      "cacheReadTokens": 1037491,
+      "costUsd": 1.1646817499999997,
+      "durationMs": 295482,
+      "wallClockMs": 295482,
+      "stepTimings": {
+        "buildAgentMs": 295482,
+        "reviewGateMs": 69783
+      }
+    },
+    {
+      "iteration": 4,
+      "timestamp": "2026-09-02T06:43:47.849Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Implement snake movement and rendering",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 32424,
+      "tokensIn": 108,
+      "tokensOut": 32316,
+      "cacheReadTokens": 3666291,
+      "costUsd": 3.1636355000000007,
+      "durationMs": 530721,
+      "wallClockMs": 530721,
+      "stepTimings": {
+        "buildAgentMs": 530721,
+        "reviewGateMs": 67627
+      }
+    },
+    {
+      "iteration": 5,
+      "timestamp": "2026-09-02T06:52:26.110Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Implement food spawning and collision detection",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 31705,
+      "tokensIn": 90,
+      "tokensOut": 31615,
+      "cacheReadTokens": 3285156,
+      "costUsd": 2.971328,
+      "durationMs": 450148,
+      "wallClockMs": 450148,
+      "stepTimings": {
+        "buildAgentMs": 450148,
+        "reviewGateMs": 66992
+      }
+    },
+    {
+      "iteration": 6,
+      "timestamp": "2026-09-02T07:01:04.873Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 0,
+      "taskWorkedOn": "Implement game over logic",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 26641,
+      "tokensIn": 100,
+      "tokensOut": 26541,
+      "cacheReadTokens": 3727962,
+      "costUsd": 3.08491225,
+      "durationMs": 451286,
+      "wallClockMs": 451286,
+      "stepTimings": {
+        "buildAgentMs": 451286,
+        "reviewGateMs": 68326
+      }
+    },
+    {
+      "iteration": 7,
+      "timestamp": "2026-09-02T07:09:33.093Z",
+      "agentRole": "build",
+      "ciStatusAtStart": "not-checked",
+      "ciQueriesMade": 1,
+      "taskWorkedOn": "Add restart functionality and final polish",
+      "ciFailureFixed": false,
+      "outcome": "success-local",
+      "tokensUsed": 25929,
+      "tokensIn": 84,
+      "tokensOut": 25845,
+      "cacheReadTokens": 3017425,
+      "costUsd": 2.6561075000000005,
+      "durationMs": 439422,
+      "wallClockMs": 439422,
+      "failureContextChars": 0,
+      "logMode": "failure-report",
+      "pipelineNumber": 1416,
+      "pipelineDurationMs": 102292,
+      "estimatedCredits": 14.024333333333335,
+      "creditsComplete": true,
+      "stepTimings": {
+        "buildAgentMs": 439422,
+        "reviewGateMs": 68524,
+        "ciPollMs": 63790
+      }
+    }
+  ],
+  "summary": {
+    "totalIterations": 8,
+    "totalTokens": 156695,
+    "totalTokensIn": 554,
+    "totalTokensOut": 156141,
+    "diagnosisTokens": 0,
+    "codegenTokens": 156695,
+    "totalCost": 15.728390250000002,
+    "ciQueriesTotal": 1,
+    "ciFailuresEncountered": 0,
+    "ciFailuresFixed": 0,
+    "tasksCompleted": 7,
+    "timeToFirstCIGreen": 3201497,
+    "totalDurationMs": 3403904,
+    "pipelineRuns": 1,
+    "totalPipelineDurationMs": 102292,
+    "totalEstimatedCredits": 14.024333333333335,
+    "innerLoopMode": "sidecar-only",
+    "ciPushesTotal": 1,
+    "ciPushesGreen": 1,
+    "everyCommitGreenRate": 1,
+    "firstPushGreen": true
+  }
+}

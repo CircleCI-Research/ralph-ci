@@ -1,0 +1,226 @@
+/* Classic Snake Game — retro arcade styling.
+ *
+ * Palette: near-black CRT background with phosphor-green foreground. Every
+ * colour is declared once as a custom property so the whole board can be
+ * re-tinted from one place.
+ */
+
+:root {
+  --bg: #0b0f0b;
+  --board-bg: #0f150f;
+  --neon: #39ff14;
+  --neon-dim: #1f7a10;
+  --neon-glow: rgba(57, 255, 20, 0.45);
+  --overlay-veil: rgba(11, 15, 11, 0.88);
+
+  /* Amber, the other classic CRT phosphor. Drawn on the canvas by game.js,
+     declared here so the whole board palette stays in one place. */
+  --food: #ffb000;
+
+  --cell: 20px;
+  --board-size: 400px;
+  --border-width: 4px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 24px 16px;
+
+  /* Centre the game both ways in the viewport. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background-color: var(--bg);
+
+  /* Faint scanlines for the CRT feel; sits behind everything. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(57, 255, 20, 0.04) 0,
+    rgba(57, 255, 20, 0.04) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+
+  color: var(--neon);
+  font-family: "Courier New", "Lucida Console", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 2.5rem;
+  letter-spacing: 0.35em;
+
+  /* Indent by one letter-space so the tracking does not shift the word left. */
+  text-indent: 0.35em;
+  text-shadow: 0 0 12px var(--neon-glow);
+}
+
+/* --- Score readout ------------------------------------------------------- */
+
+.score-display {
+  /* Match the framed board width so the column edges line up. */
+  width: calc(var(--board-size) + 2 * var(--border-width));
+  padding: 8px 14px;
+  border: 2px solid var(--neon-dim);
+  border-radius: 4px;
+  background-color: var(--board-bg);
+  font-size: 1.1rem;
+  text-align: center;
+}
+
+#score,
+#finalScore {
+  /* Tabular-ish digits so a growing score does not jitter the layout. */
+  display: inline-block;
+  min-width: 3ch;
+  text-align: right;
+  font-weight: bold;
+  text-shadow: 0 0 8px var(--neon-glow);
+}
+
+/* --- Board and canvas ---------------------------------------------------- */
+
+.board {
+  position: relative;
+
+  /* Wraps the canvas plus its border, so the overlays (inset: 0) cover the
+     whole framed board rather than leaving the frame poking out. */
+  width: calc(var(--board-size) + 2 * var(--border-width));
+  height: calc(var(--board-size) + 2 * var(--border-width));
+  line-height: 0;
+}
+
+#gameCanvas {
+  display: block;
+
+  /* content-box keeps the CSS drawing area at exactly 400x400 to match the
+     canvas bitmap — a border-box canvas would scale (and blur) every cell. */
+  box-sizing: content-box;
+  width: var(--board-size);
+  height: var(--board-size);
+
+  /* Keep cells blocky rather than smeared if --board-size shrinks below the
+     400px bitmap on a narrow screen. */
+  image-rendering: pixelated;
+
+  border: var(--border-width) solid var(--neon);
+  border-radius: 4px;
+  background-color: var(--board-bg);
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 18px var(--neon-glow);
+}
+
+/* --- Overlays (start + game over) ---------------------------------------- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+
+  border-radius: 4px;
+  background-color: var(--overlay-veil);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.overlay h2 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.15em;
+  text-shadow: 0 0 12px var(--neon-glow);
+}
+
+.overlay p {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.overlay .controls {
+  font-size: 0.8rem;
+  color: var(--neon-dim);
+  letter-spacing: 0.12em;
+}
+
+/* --- Restart button ------------------------------------------------------ */
+
+#restartButton {
+  margin-top: 4px;
+  padding: 10px 22px;
+  border: 2px solid var(--neon);
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--neon);
+  font-family: inherit;
+  font-size: 0.95rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+#restartButton:hover,
+#restartButton:focus-visible {
+  background-color: var(--neon);
+  color: var(--bg);
+  box-shadow: 0 0 14px var(--neon-glow);
+  outline: none;
+}
+
+#restartButton:active {
+  transform: translateY(1px);
+}
+
+/* --- Utilities ----------------------------------------------------------- */
+
+.hidden {
+  display: none;
+}
+
+/* On a narrow screen shrink the board (and everything measured from it) so the
+   game still fits and stays centred instead of spilling off the side. */
+@media (max-width: 480px) {
+  :root {
+    --board-size: calc(100vw - 32px - 2 * var(--border-width));
+  }
+
+  body {
+    padding: 16px;
+  }
+
+  .title {
+    font-size: 1.8rem;
+  }
+}
+
+/* Respect users who ask for less motion: drop the button transition. */
+@media (prefers-reduced-motion: reduce) {
+  #restartButton {
+    transition: none;
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "uniqueId": "w-chunk-sidecars-03__1.0.1",
+  "runner": "claude",
+  "buildAgent": {
+    "timeoutMinutes": 10,
+    "verbose": true
+  },
+  "git": {
+    "autoPush": true,
+    "pushOnLocalSuccess": true
+  },
+  "ci": {
+    "enabled": true,
+    "provider": "circleci",
+    "waitForCI": true,
+    "maxCIWaitSeconds": 300,
+    "requireGreenBeforeComplete": true,
+    "approvalGateEnabled": true,
+    "branchStrategy": "feature-branch",
+    "doctor": {
+      "enabled": true,
+      "maxLogLength": 0
+    }
+  },
+  "reviewGate": {
+    "enabled": true,
+    "testTimeoutSeconds": 60,
+    "formatFixEnabled": true,
+    "lintFixEnabled": true,
+    "testsEnabled": true,
+    "chunkSidecar": {
+      "enabled": true,
+      "syncMode": "tar-ssh",
+      "strictCli": true,
+      "skipSync": false,
+      "syncTimeoutSeconds": 180,
+      "remoteValidateTimeoutSeconds": 300
+    }
+  }
+}

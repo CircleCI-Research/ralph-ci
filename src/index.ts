@@ -61,7 +61,7 @@ program
 program
   .command("check-chunk")
   .description(
-    "Verify Chunk CLI, auth, validations list, and active sidecar (for reviewGate.chunkSidecar)",
+    "Verify Chunk CLI, auth, validations list, and active sidecar (for reviewGate.chunkSidecar). Use --upgrade-chunk for latest Chunk release.",
   )
   .option(
     "-w, --working-directory <path>",
@@ -72,12 +72,17 @@ program
     "--no-brew-install",
     "Do not run `brew install` when Chunk is missing (for CI or locked-down machines)",
   )
+  .option(
+    "--upgrade-chunk",
+    "After Chunk is found: run `brew upgrade` (Homebrew) then `chunk upgrade` for the latest CLI (may take minutes)",
+  )
   .action((options) => {
     try {
       checkChunk({
         verbose: options.verbose,
         workingDirectory: options.workingDirectory,
         brewInstallWhenMissing: options.brewInstall,
+        upgradeChunk: Boolean(options.upgradeChunk),
       });
     } catch (error) {
       console.error(
@@ -182,7 +187,7 @@ program
   )
   .option(
     "-m, --max-iterations <number>",
-    "Maximum loop iterations (default: 10)",
+    "Maximum loop iterations (default: 101)",
     parseInt,
   )
   .option("--unlimited", "Allow unlimited iterations (use with caution)")
@@ -216,11 +221,15 @@ program
     parseInt,
   )
   .option("--serve-dir <directory>", "Directory to serve (default: src)")
+  .option(
+    "--no-prevent-sleep",
+    "Allow macOS to sleep during the run (not recommended for long agent runs)",
+  )
   .action(async (options) => {
     try {
       const maxIterations = options.unlimited
         ? Infinity
-        : options.maxIterations || 10;
+        : options.maxIterations || 101;
 
       // Smart push is default (pushOnLocalSuccess: true)
       // --push-every-commit disables smart push (chatty mode)
@@ -249,6 +258,7 @@ program
         serveEnabled,
         servePort: options.servePort,
         serveDirectory: options.serveDir,
+        preventSleep: options.preventSleep,
       });
     } catch (error) {
       console.error(
@@ -270,7 +280,7 @@ program
   )
   .option(
     "-m, --max-iterations <number>",
-    "Maximum loop iterations (default: 10)",
+    "Maximum loop iterations (default: 101)",
     parseInt,
   )
   .option("--unlimited", "Allow unlimited iterations (use with caution)")
@@ -303,6 +313,10 @@ program
     parseInt,
   )
   .option("--serve-dir <directory>", "Directory to serve (default: src)")
+  .option(
+    "--no-prevent-sleep",
+    "Allow macOS to sleep during the run (not recommended for long agent runs)",
+  )
   .action(async (options) => {
     console.log(
       'Note: "run-ci" is deprecated. Use "run" instead (CI is enabled by default).\n',
@@ -310,7 +324,7 @@ program
     try {
       const maxIterations = options.unlimited
         ? Infinity
-        : options.maxIterations || 10;
+        : options.maxIterations || 101;
       const pushOnLocalSuccess = !options.pushEveryCommit;
       const ciEnabled = options.ci !== false;
 
@@ -329,6 +343,7 @@ program
         serveEnabled: options.serve,
         servePort: options.servePort,
         serveDirectory: options.serveDir,
+        preventSleep: options.preventSleep,
       });
     } catch (error) {
       console.error(

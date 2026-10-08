@@ -3,6 +3,21 @@
  * Used by the CLI to inject CI status into the agent's context.
  */
 
+import { execFile } from "child_process";
+import { promisify } from "util";
+import type { CIDoctorLogMode } from "./config.js";
+import {
+  estimateCredits,
+  jobDurationMs,
+  sumPipelineUsage,
+  type PipelineUsage,
+} from "./circleci-cost.js";
+
+const execFileAsync = promisify(execFile);
+
+export type { PipelineUsage } from "./circleci-cost.js";
+export type { CIDoctorLogMode } from "./config.js";
+
 // Node.js 18+ has native fetch
 declare const fetch: typeof globalThis.fetch;
 
@@ -49,6 +64,8 @@ interface JobResponse {
     name: string;
     job_number: number;
     status: string;
+    started_at?: string | null;
+    stopped_at?: string | null;
   }>;
 }
 
@@ -452,4 +469,218 @@ export async function pollUntilSettled(
   }
 
   return lastStatus;
+}
+
+export type FailureContextSource =
+  | "full-logs"
+  | "failure-report"
+  | "none"
+  | "failure-report-error";
+
+export interface FailureContext {
+  logs: string | null;
+  logMode: CIDoctorLogMode;
+  failureContextChars: number;
+  source: FailureContextSource;
+}
+
+export type FailureReportRunner = (args: {
+  projectSlug: string;
+  branch: string;
+}) => Promise<string>;
+
+export async function defaultFailureReportRunner(args: {
+  projectSlug: string;
+  branch: string;
+}): Promise<string> {
+  const bin = process.env.CIRCLECI_CLI || "circleci";
+  const { stdout } = await execFileAsync(
+    bin,
+    [
+      "run",
+      "get",
+      "--failure-report",
+      "--no-interactive",
+      "--no-color",
+      "--project",
+      args.projectSlug,
+      "--branch",
+      args.branch,
+    ],
+    { encoding: "utf-8", timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  return stdout;
+}
+
+/**
+ * Fetch CI Doctor / Build Agent failure context.
+ *
+ * Control (`full`): unshaped REST job logs. Treatment (`failure-report`):
+ * condensed `circleci run get --failure-report`. Does not fall back from
+ * failure-report to full logs — that would contaminate the treatment arm.
+ */
+export async function fetchFailureContext(
+  projectSlug: string,
+  ciStatus: CIStatus,
+  options: {
+    logMode: CIDoctorLogMode;
+    maxLogLength?: number;
+    apiToken?: string;
+    runFailureReport?: FailureReportRunner;
+  },
+): Promise<FailureContext> {
+  const logMode = options.logMode;
+  if (ciStatus.status !== "failed") {
+    return {
+      logs: null,
+      logMode,
+      failureContextChars: 0,
+      source: "none",
+    };
+  }
+
+  if (logMode === "failure-report") {
+    const branch = ciStatus.branch;
+    if (!branch) {
+      const logs =
+        '[ralphci] ci.doctor.logMode is "failure-report" but CI status has no branch; cannot run `circleci run get --failure-report`.';
+      return {
+        logs,
+        logMode,
+        failureContextChars: logs.length,
+        source: "failure-report-error",
+      };
+    }
+    const runner = options.runFailureReport ?? defaultFailureReportRunner;
+    try {
+      const report = (await runner({ projectSlug, branch })).trim();
+      if (!report) {
+        const logs =
+          "[ralphci] `circleci run get --failure-report` returned empty output.";
+        return {
+          logs,
+          logMode,
+          failureContextChars: logs.length,
+          source: "failure-report-error",
+        };
+      }
+      return {
+        logs: report,
+        logMode,
+        failureContextChars: report.length,
+        source: "failure-report",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const logs = `[ralphci] ci.doctor.logMode is "failure-report" but \`circleci run get --failure-report\` failed:\n${message}`;
+      return {
+        logs,
+        logMode,
+        failureContextChars: logs.length,
+        source: "failure-report-error",
+      };
+    }
+  }
+
+  const logs = await fetchAllFailureLogs(
+    projectSlug,
+    ciStatus,
+    options.apiToken,
+    options.maxLogLength ?? 0,
+  );
+  return {
+    logs,
+    logMode,
+    failureContextChars: logs?.length ?? 0,
+    source: logs ? "full-logs" : "none",
+  };
+}
+
+interface JobDetailsV2 {
+  number?: number;
+  name?: string;
+  status?: string;
+  started_at?: string | null;
+  stopped_at?: string | null;
+  duration?: number;
+  resource_class?: string;
+  executor?: { resource_class?: string; type?: string };
+}
+
+async function fetchJobUsageDetails(
+  projectSlug: string,
+  jobNumber: number,
+  token: string,
+): Promise<JobDetailsV2 | null> {
+  const jobUrl = `https://circleci.com/api/v2/project/${projectSlug}/job/${jobNumber}`;
+  const jobRes = await fetch(jobUrl, {
+    headers: {
+      "Circle-Token": token,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!jobRes.ok) return null;
+  return (await jobRes.json()) as JobDetailsV2;
+}
+
+/**
+ * Wall-clock and estimated compute credits for every job in a settled workflow.
+ */
+export async function fetchPipelineUsage(
+  projectSlug: string,
+  ciStatus: CIStatus,
+  apiToken?: string,
+): Promise<PipelineUsage | null> {
+  const token = apiToken || process.env.CIRCLE_TOKEN;
+  if (!token || !ciStatus.workflowId) return null;
+  if (ciStatus.status !== "success" && ciStatus.status !== "failed") {
+    return null;
+  }
+
+  const jobsUrl = `https://circleci.com/api/v2/workflow/${ciStatus.workflowId}/job`;
+  const jobsRes = await fetch(jobsUrl, {
+    headers: {
+      "Circle-Token": token,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!jobsRes.ok) return null;
+
+  const jobs = (await jobsRes.json()) as JobResponse;
+  const usageJobs = [];
+
+  for (const job of jobs.items ?? []) {
+    if (!job.job_number) continue;
+    const details = await fetchJobUsageDetails(
+      projectSlug,
+      job.job_number,
+      token,
+    );
+    const resourceClass =
+      details?.executor?.resource_class || details?.resource_class || undefined;
+    const durationMs = jobDurationMs({
+      duration: details?.duration,
+      started_at: details?.started_at ?? job.started_at,
+      stopped_at: details?.stopped_at ?? job.stopped_at,
+    });
+    usageJobs.push({
+      name: job.name,
+      jobNumber: job.job_number,
+      status: job.status,
+      resourceClass,
+      durationMs,
+      estimatedCredits: estimateCredits(resourceClass, durationMs),
+    });
+  }
+
+  const summed = sumPipelineUsage(usageJobs);
+  return {
+    pipelineNumber: ciStatus.pipelineNumber,
+    workflowId: ciStatus.workflowId,
+    jobCount: usageJobs.length,
+    totalDurationMs: summed.totalDurationMs,
+    estimatedCredits: summed.estimatedCredits,
+    creditsComplete: summed.creditsComplete,
+    jobs: usageJobs,
+  };
 }
