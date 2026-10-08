@@ -1,0 +1,175 @@
+/* Classic Snake — retro arcade styling.
+   Dark CRT-inspired palette with a neon green accent. */
+
+:root {
+  --bg: #0b0f0b;
+  --bg-panel: #111811;
+  --neon: #39ff14;
+  --neon-dim: #1f7d10;
+  --text: #d6ffd0;
+  --text-muted: #7ea87a;
+  --danger: #ff4d4d;
+  --board-size: 400px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 50% 0%, #16261a 0%, transparent 60%),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(57, 255, 20, 0.04) 0px,
+      rgba(57, 255, 20, 0.04) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+  color: var(--text);
+  font-family: "Courier New", Courier, monospace;
+  letter-spacing: 1px;
+}
+
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  background-color: var(--bg-panel);
+  border: 2px solid var(--neon-dim);
+  border-radius: 8px;
+  box-shadow: 0 0 24px rgba(57, 255, 20, 0.15);
+}
+
+.title {
+  margin: 0;
+  font-size: 2.5rem;
+  letter-spacing: 10px;
+  text-transform: uppercase;
+  color: var(--neon);
+  text-shadow:
+    0 0 8px rgba(57, 255, 20, 0.8),
+    0 0 20px rgba(57, 255, 20, 0.4);
+}
+
+.score-display {
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+#score,
+#finalScore {
+  color: var(--neon);
+  font-weight: bold;
+  text-shadow: 0 0 8px rgba(57, 255, 20, 0.6);
+}
+
+/* The board is the positioning context for the overlays. */
+.board {
+  position: relative;
+  width: var(--board-size);
+  height: var(--board-size);
+}
+
+#gameCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: #060a06;
+  border: 3px solid var(--neon);
+  border-radius: 4px;
+  box-shadow:
+    0 0 12px rgba(57, 255, 20, 0.5),
+    inset 0 0 24px rgba(0, 0, 0, 0.8);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  text-align: center;
+  background-color: rgba(6, 10, 6, 0.88);
+  border-radius: 4px;
+}
+
+.overlay h2 {
+  margin: 0;
+  font-size: 1.75rem;
+  text-transform: uppercase;
+  color: var(--neon);
+  text-shadow: 0 0 12px rgba(57, 255, 20, 0.6);
+}
+
+#gameOverOverlay h2 {
+  color: var(--danger);
+  text-shadow: 0 0 12px rgba(255, 77, 77, 0.6);
+}
+
+.overlay p {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.overlay .controls {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.hidden {
+  display: none;
+}
+
+#restartButton {
+  padding: 10px 22px;
+  font-family: inherit;
+  font-size: 1rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--neon);
+  background-color: transparent;
+  border: 2px solid var(--neon);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+#restartButton:hover,
+#restartButton:focus-visible {
+  color: #060a06;
+  background-color: var(--neon);
+  outline: none;
+  box-shadow: 0 0 16px rgba(57, 255, 20, 0.6);
+}
+
+@media (max-width: 480px) {
+  :root {
+    --board-size: 300px;
+  }
+
+  .title {
+    font-size: 1.75rem;
+    letter-spacing: 6px;
+  }
+}

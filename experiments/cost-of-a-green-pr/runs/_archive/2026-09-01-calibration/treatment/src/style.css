@@ -1,0 +1,162 @@
+/* Classic Snake Game - retro arcade styling
+ *
+ * Palette: near-black CRT background with neon green phosphor accents.
+ * Layout: the whole game is centered in the viewport; overlays are absolutely
+ * positioned over the canvas via .canvas-wrapper (position: relative).
+ */
+
+:root {
+  --bg: #0b0f0a;
+  --bg-panel: #101710;
+  --neon: #39ff14;
+  --neon-dim: #1f8a10;
+  --food: #ff2e4d;
+  --text: #d7ffd0;
+  --shadow-glow: 0 0 12px rgba(57, 255, 20, 0.45);
+  --font-retro: "Courier New", "Lucida Console", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg);
+  background-image: radial-gradient(
+    circle at 50% 30%,
+    #14201300 0%,
+    transparent 70%
+  );
+  color: var(--text);
+  font-family: var(--font-retro);
+  letter-spacing: 0.08em;
+}
+
+/* Centered column: title, score, board. */
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+}
+
+.title {
+  margin: 0;
+  font-size: 2.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.35em;
+  /* Trailing letter-spacing pushes the text off-center; nudge it back. */
+  text-indent: 0.35em;
+  color: var(--neon);
+  text-shadow: var(--shadow-glow);
+}
+
+.score-display {
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  padding: 8px 20px;
+  border: 2px solid var(--neon-dim);
+  border-radius: 4px;
+  background-color: var(--bg-panel);
+}
+
+#score,
+#finalScore {
+  color: var(--neon);
+  font-weight: bold;
+  text-shadow: var(--shadow-glow);
+}
+
+/* Positioning context for the overlays that sit on top of the board. */
+.canvas-wrapper {
+  position: relative;
+  line-height: 0;
+}
+
+#gameCanvas {
+  display: block;
+  background-color: #060906;
+  border: 4px solid var(--neon);
+  border-radius: 4px;
+  box-shadow:
+    var(--shadow-glow),
+    inset 0 0 24px rgba(57, 255, 20, 0.08);
+}
+
+/* Overlays cover the canvas exactly and stack their contents centered. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  text-align: center;
+  line-height: 1.5;
+  background-color: rgba(6, 9, 6, 0.88);
+  border-radius: 4px;
+}
+
+.overlay h2 {
+  margin: 0;
+  font-size: 1.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--neon);
+  text-shadow: var(--shadow-glow);
+}
+
+.overlay p {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.overlay .controls {
+  font-size: 0.85rem;
+  color: var(--neon-dim);
+}
+
+.game-over-overlay h2 {
+  color: var(--food);
+  text-shadow: 0 0 12px rgba(255, 46, 77, 0.5);
+}
+
+#restartButton {
+  margin-top: 8px;
+  padding: 10px 24px;
+  font-family: inherit;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--bg);
+  background-color: var(--neon);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#restartButton:hover,
+#restartButton:focus-visible {
+  background-color: var(--text);
+  box-shadow: var(--shadow-glow);
+  outline: none;
+}
+
+/* Toggled from game.js to show/hide overlays. Declared last, and with a
+ * matching-specificity .overlay rule, so it wins over .overlay's display. */
+.hidden,
+.overlay.hidden {
+  display: none;
+}

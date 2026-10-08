@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { loadConfig, resolveReviewGateConfig } from "./config.js";
+import {
+  loadConfig,
+  resolveCIDoctorConfig,
+  resolvePreflightSurveyConfig,
+  resolveReviewGateConfig,
+} from "./config.js";
 import { CommandError } from "./errors.js";
 import { readFile } from "fs/promises";
 
@@ -294,18 +299,107 @@ describe("resolveReviewGateConfig", () => {
     const r = resolveReviewGateConfig({ enabled: true });
     expect(r.chunkSidecar.enabled).toBe(false);
     expect(r.chunkSidecar.syncTimeoutSeconds).toBe(180);
-    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(120);
+    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(300);
     expect(r.chunkSidecar.strictCli).toBe(false);
     expect(r.chunkSidecar.skipSync).toBe(false);
+    expect(r.chunkSidecar.remoteWorkdir).toBeUndefined();
+    expect(r.chunkSidecar.syncMode).toBe("chunk-cli");
   });
 
   it("merges partial chunkSidecar from input", () => {
     const r = resolveReviewGateConfig({
-      chunkSidecar: { enabled: true, strictCli: true, syncTimeoutSeconds: 300 },
+      chunkSidecar: {
+        enabled: true,
+        strictCli: true,
+        syncTimeoutSeconds: 300,
+        remoteWorkdir: "./workspace/foo",
+      },
     });
     expect(r.chunkSidecar.enabled).toBe(true);
     expect(r.chunkSidecar.strictCli).toBe(true);
     expect(r.chunkSidecar.syncTimeoutSeconds).toBe(300);
-    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(120);
+    expect(r.chunkSidecar.remoteValidateTimeoutSeconds).toBe(300);
+    expect(r.chunkSidecar.remoteWorkdir).toBe("./workspace/foo");
+    expect(r.chunkSidecar.syncMode).toBe("chunk-cli");
+  });
+
+  it("allows tar-ssh syncMode", () => {
+    const r = resolveReviewGateConfig({
+      chunkSidecar: { enabled: true, syncMode: "tar-ssh" },
+    });
+    expect(r.chunkSidecar.syncMode).toBe("tar-ssh");
+  });
+
+  it("rejects invalid chunkSidecar.syncMode", () => {
+    expect(() =>
+      resolveReviewGateConfig({
+        chunkSidecar: { syncMode: "rsync" as "tar-ssh" },
+      }),
+    ).toThrow(CommandError);
+  });
+
+  it("sidecar-only disables local lint and tests", () => {
+    const r = resolveReviewGateConfig({ innerLoop: "sidecar-only" });
+    expect(r.innerLoop).toBe("sidecar-only");
+    expect(r.lintFixEnabled).toBe(false);
+    expect(r.testsEnabled).toBe(false);
+    expect(r.formatFixEnabled).toBe(true);
+  });
+
+  it("local+sidecar keeps default lint and tests", () => {
+    const r = resolveReviewGateConfig({ innerLoop: "local+sidecar" });
+    expect(r.lintFixEnabled).toBe(true);
+    expect(r.testsEnabled).toBe(true);
+  });
+
+  it("rejects invalid innerLoop", () => {
+    expect(() =>
+      resolveReviewGateConfig({ innerLoop: "sidecar" as "sidecar-only" }),
+    ).toThrow(CommandError);
+  });
+});
+
+describe("resolvePreflightSurveyConfig", () => {
+  it("defaults to disabled", () => {
+    expect(resolvePreflightSurveyConfig({}).enabled).toBe(false);
+  });
+
+  it("merges enabled flag", () => {
+    expect(resolvePreflightSurveyConfig({ enabled: true }).enabled).toBe(true);
+  });
+});
+
+describe("resolveCIDoctorConfig", () => {
+  it("defaults logMode to full (baseline unshaped logs)", () => {
+    const r = resolveCIDoctorConfig({});
+    expect(r.logMode).toBe("full");
+    expect(r.maxLogLength).toBe(0);
+  });
+
+  it("accepts failure-report logMode", () => {
+    const r = resolveCIDoctorConfig({ logMode: "failure-report" });
+    expect(r.logMode).toBe("failure-report");
+  });
+
+  it("rejects invalid logMode", () => {
+    expect(() => resolveCIDoctorConfig({ logMode: "mcp" as "full" })).toThrow(
+      CommandError,
+    );
+  });
+
+  it("defaults maxInvocationsPerFailureFingerprint to 1", () => {
+    const r = resolveCIDoctorConfig({});
+    expect(r.maxInvocationsPerFailureFingerprint).toBe(1);
+  });
+
+  it("accepts a higher maxInvocationsPerFailureFingerprint", () => {
+    const r = resolveCIDoctorConfig({ maxInvocationsPerFailureFingerprint: 3 });
+    expect(r.maxInvocationsPerFailureFingerprint).toBe(3);
+  });
+
+  it("rejects maxInvocationsPerFailureFingerprint < 1", () => {
+    expect(() =>
+      resolveCIDoctorConfig({ maxInvocationsPerFailureFingerprint: 0 }),
+    ).toThrow(CommandError);
   });
 });

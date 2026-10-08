@@ -1,0 +1,112 @@
+/* Retro arcade styling for the Snake game: dark CRT-ish background, a
+   monospace type stack, and a phosphor-green accent on every UI chrome. */
+
+:root {
+  --bg: #0b0f0a;
+  --bg-board: #101710;
+  --accent: #39ff14;
+  --accent-dim: #1f8b12;
+  --border: #2fbf1a;
+  --text: #d7ffd0;
+  --overlay-scrim: rgba(6, 10, 6, 0.82);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Courier New", Courier, monospace;
+  letter-spacing: 0.08em;
+}
+
+.game {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+}
+
+.game__title {
+  margin: 0;
+  font-size: 2rem;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 12px var(--accent-dim);
+}
+
+.game__score {
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* The board is the positioning context for the overlay, so the overlay can
+   cover exactly the canvas rather than the whole page. It shrinks to the
+   canvas so the canvas keeps its intrinsic 400x400 size and the 20x20 grid
+   stays on whole pixels. */
+.game__board {
+  position: relative;
+  width: fit-content;
+}
+
+#canvas {
+  display: block;
+  background: var(--bg-board);
+  border: 4px solid var(--border);
+  box-shadow: 0 0 24px rgba(57, 255, 20, 0.25);
+}
+
+.game__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+  text-align: center;
+  background: var(--overlay-scrim);
+}
+
+/* Hiding the overlay is a JS concern; `hidden` must beat `display: flex`. */
+.game__overlay[hidden] {
+  display: none;
+}
+
+.game__overlay-message {
+  margin: 0;
+  font-size: 1.5rem;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 10px var(--accent-dim);
+}
+
+.game__restart {
+  padding: 10px 24px;
+  font: inherit;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: transparent;
+  border: 2px solid var(--accent-dim);
+  cursor: pointer;
+}
+
+.game__restart:hover,
+.game__restart:focus-visible {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.game__restart[hidden] {
+  display: none;
+}

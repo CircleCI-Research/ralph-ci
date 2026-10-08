@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Classic Snake Game</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="game-container">
+      <h1 class="title">SNAKE</h1>
+
+      <div class="score-display">
+        <span>Score: <span id="score">0</span></span>
+      </div>
+
+      <div class="board">
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+
+        <div id="startOverlay" class="overlay">
+          <h2>Classic Snake</h2>
+          <p>Press SPACE to start</p>
+          <p class="controls">Use the arrow keys to steer</p>
+        </div>
+
+        <div id="gameOverOverlay" class="overlay hidden">
+          <h2>Game Over!</h2>
+          <p>Final Score: <span id="finalScore">0</span></p>
+          <button id="restartButton" type="button">Restart Game</button>
+          <p class="controls">Or press SPACE to play again</p>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="game.js"></script>
+  </body>
+</html>

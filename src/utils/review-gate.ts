@@ -2,18 +2,23 @@
  * Review Gate — deterministic pre-push quality gate.
  *
  * Runs format:fix + lint:fix + test:run (with hard timeout), and optionally
- * CircleCI Chunk sidecar remote validation (`chunk sidecar sync` +
- * `chunk validate --remote`) when enabled in config.
+ * CircleCI Chunk sidecar remote validation (`chunk validate --remote`) when
+ * enabled. The workspace is uploaded with **`chunk sidecar sync`** by default
+ * (`syncMode: chunk-cli`); optional **`tar-ssh`** streams a tarball over
+ * `chunk sidecar ssh` for unpushed / dirty trees.
  *
  * No LLM involved — this is pure automation. The gate catches issues before
  * they waste a full pipeline run.
  */
 
+import { Buffer } from "node:buffer";
 import { execSync, spawn } from "child_process";
 import { setTimeout, clearTimeout } from "timers";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import { ReviewGateConfig } from "./config.js";
+import { pruneE2bHostKeysFromChunkAiKnownHosts } from "./chunk-ai-known-hosts.js";
+import { runChunkSidecarTarStreamSync } from "./chunk-sidecar-tar-sync.js";
 import { isChunkCliAvailable } from "./chunk-cli.js";
 import { c } from "./terminal.js";
 
@@ -39,6 +44,71 @@ function findPackageRoot(workingDirectory: string): string {
 
   // Fallback: return original (pnpm will error, but that's what happened before)
   return workingDirectory;
+}
+
+/** Runtime file (gitignored) so Chunk sidecar `pnpm test:run` uses the same Vitest filter. */
+const REVIEW_GATE_TEST_FILTER_FILE = ".ralphci/review-gate-test-filter";
+
+/**
+ * When `ralphci run -w` targets an experiment or feature folder, return a Vitest
+ * path filter relative to the package root. Otherwise return null (full suite).
+ */
+export function resolveReviewGateTestFilter(
+  workingDirectory: string,
+): string | null {
+  const packageRoot = findPackageRoot(workingDirectory);
+  const resolvedWd = path.resolve(workingDirectory);
+  const resolvedRoot = path.resolve(packageRoot);
+
+  if (resolvedWd === resolvedRoot) {
+    return null;
+  }
+
+  const rel = path.relative(resolvedRoot, resolvedWd);
+  if (!rel || rel.startsWith("..")) {
+    return null;
+  }
+
+  const normalized = rel.split(path.sep).join("/");
+  if (
+    normalized.startsWith("experiments/") ||
+    normalized.startsWith("features/")
+  ) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function writeReviewGateTestFilterFile(
+  packageRoot: string,
+  filter: string | null,
+): void {
+  const filePath = path.join(packageRoot, REVIEW_GATE_TEST_FILTER_FILE);
+  if (!filter) {
+    if (existsSync(filePath)) {
+      unlinkSync(filePath);
+    }
+    return;
+  }
+
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, filter, "utf-8");
+}
+
+/**
+ * Sidecar directory where the project tree is placed for remote validate.
+ * Used as `--workdir` for `chunk validate --remote`, and for `chunk sidecar sync`
+ * when `reviewGate.chunkSidecar.syncMode` is `chunk-cli`. For `tar-ssh`, the
+ * tarball is extracted to this path over SSH before validate runs.
+ */
+export function resolveChunkRemoteWorkdir(
+  workingDirectory: string,
+  override?: string,
+): string {
+  if (override) return override;
+  const chunkCwd = findPackageRoot(workingDirectory);
+  return `./workspace/${path.basename(chunkCwd)}`;
 }
 
 export interface ReviewGateResult {
@@ -183,8 +253,14 @@ export async function runTestsWithTimeout(
   timeoutSeconds: number,
 ): Promise<{ pass: boolean; timedOut: boolean; error: string | null }> {
   const packageRoot = findPackageRoot(workingDirectory);
+  const testFilter = resolveReviewGateTestFilter(workingDirectory);
+  const testArgs = ["test:run"];
+  if (testFilter) {
+    testArgs.push(testFilter, "--passWithNoTests");
+  }
+
   return new Promise((resolve) => {
-    const child = spawn("pnpm", ["test:run"], {
+    const child = spawn("pnpm", testArgs, {
       cwd: packageRoot,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -275,6 +351,53 @@ export async function runTestsWithTimeout(
   });
 }
 
+/** Per-stream cap so a chatty Chunk process cannot grow unbounded in memory. */
+const CHUNK_SUBPROCESS_CAPTURE_MAX_CHARS = 256 * 1024;
+
+const CHUNK_FAILURE_TAIL_LINE_COUNT = 80;
+
+/**
+ * Build text for `chunkRemoteError` / CI Doctor: same information a human would
+ * see in the terminal, without relying on "scroll up" (agents only read this string).
+ */
+function formatChunkSubprocessFailureMessage(
+  timedOut: boolean,
+  timeoutSeconds: number,
+  code: number | null,
+  signal: string | null,
+  stdoutBuf: string,
+  stderrBuf: string,
+): string {
+  const lines: string[] = [];
+
+  if (timedOut) {
+    lines.push(`Chunk command timed out after ${timeoutSeconds}s.`);
+  } else if (code === null) {
+    lines.push(
+      signal
+        ? `Chunk exited with signal ${signal}.`
+        : "Chunk exited without an exit code (the process may have been killed).",
+    );
+  } else {
+    lines.push(`Chunk exited with code ${code}.`);
+  }
+
+  const output = (stderrBuf + "\n" + stdoutBuf).trim();
+  if (output) {
+    lines.push("");
+    lines.push(
+      output.split("\n").slice(-CHUNK_FAILURE_TAIL_LINE_COUNT).join("\n"),
+    );
+  } else {
+    lines.push("");
+    lines.push(
+      "(Chunk produced no captured stdout/stderr before this exit or timeout.)",
+    );
+  }
+
+  return lines.join("\n");
+}
+
 /**
  * Run a `chunk` subprocess with a hard timeout (SIGKILL on expiry).
  */
@@ -283,44 +406,74 @@ async function runChunkWithTimeout(
   cwd: string,
   timeoutSeconds: number,
 ): Promise<{ pass: boolean; timedOut: boolean; error: string | null }> {
+  const e2bPrune = pruneE2bHostKeysFromChunkAiKnownHosts();
+  if (e2bPrune.error) {
+    console.log(
+      c.dim(
+        `  ↳ Could not prune stale E2B keys from chunk_ai_known_hosts: ${e2bPrune.error}`,
+      ),
+    );
+  } else if (e2bPrune.pruned > 0) {
+    console.log(
+      c.dim(
+        `  ↳ Removed ${e2bPrune.pruned} stale E2B host key line(s) from chunk_ai_known_hosts (sidecar VMs rotate SSH keys).`,
+      ),
+    );
+  }
+
   return new Promise((resolve) => {
     const child = spawn("chunk", args, {
       cwd,
-      stdio: ["pipe", "pipe", "pipe"],
+      // Pipe stdout/stderr so we can attach the tail to `chunkRemoteError` (CI Doctor
+      // only sees that string). Tee to the parent TTY so humans still get live output.
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdoutBuf = "";
+    let stderrBuf = "";
+
+    const appendStdout = (data: Buffer) => {
+      stdoutBuf += data.toString("utf8");
+      if (stdoutBuf.length > CHUNK_SUBPROCESS_CAPTURE_MAX_CHARS) {
+        stdoutBuf = stdoutBuf.slice(-CHUNK_SUBPROCESS_CAPTURE_MAX_CHARS);
+      }
+      process.stdout.write(data);
+    };
+
+    const appendStderr = (data: Buffer) => {
+      stderrBuf += data.toString("utf8");
+      if (stderrBuf.length > CHUNK_SUBPROCESS_CAPTURE_MAX_CHARS) {
+        stderrBuf = stderrBuf.slice(-CHUNK_SUBPROCESS_CAPTURE_MAX_CHARS);
+      }
+      process.stderr.write(data);
+    };
+
+    child.stdout?.on("data", appendStdout);
+    child.stderr?.on("data", appendStderr);
+
     let killed = false;
-
-    child.stdout?.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr?.on("data", (data) => {
-      stderr += data.toString();
-    });
 
     const timer = setTimeout(() => {
       killed = true;
       child.kill("SIGKILL");
     }, timeoutSeconds * 1000);
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
+      const sig = signal ?? null;
 
       if (killed) {
-        const captured = (stdout + "\n" + stderr).trim();
-        const tail = captured.split("\n").slice(-60).join("\n");
         resolve({
           pass: false,
           timedOut: true,
-          error: [
-            `Chunk command timed out after ${timeoutSeconds}s.`,
-            "",
-            "--- Output (tail) ---",
-            tail || "(no output captured)",
-          ].join("\n"),
+          error: formatChunkSubprocessFailureMessage(
+            true,
+            timeoutSeconds,
+            code,
+            sig,
+            stdoutBuf,
+            stderrBuf,
+          ),
         });
         return;
       }
@@ -328,12 +481,17 @@ async function runChunkWithTimeout(
       if (code === 0) {
         resolve({ pass: true, timedOut: false, error: null });
       } else {
-        const output = (stderr + "\n" + stdout).trim();
-        const lastLines = output.split("\n").slice(-80).join("\n");
         resolve({
           pass: false,
           timedOut: false,
-          error: `Chunk exited with code ${code}:\n${lastLines}`,
+          error: formatChunkSubprocessFailureMessage(
+            false,
+            timeoutSeconds,
+            code,
+            sig,
+            stdoutBuf,
+            stderrBuf,
+          ),
         });
       }
     });
@@ -369,7 +527,28 @@ export async function runReviewGate(
   config: ReviewGateConfig,
 ): Promise<ReviewGateResult> {
   const start = Date.now();
+  const packageRoot = findPackageRoot(workingDirectory);
+  const testFilter = resolveReviewGateTestFilter(workingDirectory);
+  writeReviewGateTestFilterFile(packageRoot, testFilter);
 
+  try {
+    return await runReviewGateInner(
+      workingDirectory,
+      config,
+      start,
+      testFilter,
+    );
+  } finally {
+    writeReviewGateTestFilterFile(packageRoot, null);
+  }
+}
+
+async function runReviewGateInner(
+  workingDirectory: string,
+  config: ReviewGateConfig,
+  start: number,
+  testFilter: string | null,
+): Promise<ReviewGateResult> {
   console.log(c.cyan("\n  ─── Review Gate ───"));
 
   // Step 1: Format fix (Prettier)
@@ -438,8 +617,11 @@ export async function runReviewGate(
   let testTimedOut = false;
 
   if (config.testsEnabled) {
+    const scopeLabel = testFilter ?? "full repo";
     console.log(
-      c.dim(`  🧪 Running tests (timeout: ${config.testTimeoutSeconds}s)...`),
+      c.dim(
+        `  🧪 Running tests (timeout: ${config.testTimeoutSeconds}s, scope: ${scopeLabel})...`,
+      ),
     );
     const testResult = await runTestsWithTimeout(
       workingDirectory,
@@ -494,46 +676,87 @@ export async function runReviewGate(
         console.log(c.dim(`  ⊘ ${chunkSidecarSkipReason}`));
       }
     } else {
+      // Use package root (same as format/lint/tests) so Chunk sees `chunk init`
+      // config when the workflow lives under a monorepo path without package.json.
+      const chunkCwd = findPackageRoot(workingDirectory);
+      const chunkRemoteWorkdir = resolveChunkRemoteWorkdir(
+        workingDirectory,
+        chunkCfg.remoteWorkdir,
+      );
       if (!chunkCfg.skipSync) {
-        console.log(
-          c.dim(
-            `  ☁️  Chunk: sidecar sync (timeout: ${chunkCfg.syncTimeoutSeconds}s)...`,
-          ),
-        );
-        const syncResult = await runChunkWithTimeout(
-          ["sidecar", "sync"],
-          workingDirectory,
-          chunkCfg.syncTimeoutSeconds,
-        );
-        if (!syncResult.pass) {
-          chunkRemotePass = false;
-          chunkSyncError = syncResult.error;
-          if (syncResult.timedOut) {
-            console.log(
-              c.red(
-                `  ✗ Chunk sidecar sync TIMED OUT after ${chunkCfg.syncTimeoutSeconds}s`,
-              ),
-            );
+        if (chunkCfg.syncMode === "chunk-cli") {
+          console.log(
+            c.dim(
+              `  ☁️  Chunk: sidecar sync (chunk-cli) → ${chunkRemoteWorkdir} (timeout: ${chunkCfg.syncTimeoutSeconds}s)...`,
+            ),
+          );
+          const syncResult = await runChunkWithTimeout(
+            ["sidecar", "sync", "--workdir", chunkRemoteWorkdir],
+            chunkCwd,
+            chunkCfg.syncTimeoutSeconds,
+          );
+          if (!syncResult.pass) {
+            chunkRemotePass = false;
+            chunkSyncError = syncResult.error;
+            if (syncResult.timedOut) {
+              console.log(
+                c.red(
+                  `  ✗ Chunk sidecar sync TIMED OUT after ${chunkCfg.syncTimeoutSeconds}s`,
+                ),
+              );
+            } else {
+              console.log(c.red("  ✗ Chunk sidecar sync failed"));
+            }
           } else {
-            console.log(c.red("  ✗ Chunk sidecar sync failed"));
+            console.log(c.green("  ✓ Chunk sidecar sync complete"));
           }
         } else {
-          console.log(c.green("  ✓ Chunk sidecar sync complete"));
+          console.log(
+            c.dim(
+              `  ☁️  Chunk: filesystem sync (tar-ssh) → ${chunkRemoteWorkdir} (timeout: ${chunkCfg.syncTimeoutSeconds}s)...`,
+            ),
+          );
+          const syncResult = await runChunkSidecarTarStreamSync({
+            localRoot: chunkCwd,
+            remoteWorkdir: chunkRemoteWorkdir,
+            timeoutSeconds: chunkCfg.syncTimeoutSeconds,
+          });
+          if (!syncResult.pass) {
+            chunkRemotePass = false;
+            chunkSyncError = syncResult.error;
+            if (syncResult.timedOut) {
+              console.log(
+                c.red(
+                  `  ✗ Chunk filesystem sync TIMED OUT after ${chunkCfg.syncTimeoutSeconds}s`,
+                ),
+              );
+            } else {
+              console.log(c.red("  ✗ Chunk filesystem sync failed"));
+            }
+          } else {
+            console.log(c.green("  ✓ Chunk filesystem sync complete"));
+          }
         }
       }
 
       if (chunkRemotePass) {
         const validateArgs = chunkCfg.validateTarget
-          ? ["validate", chunkCfg.validateTarget, "--remote"]
-          : ["validate", "--remote"];
+          ? [
+              "validate",
+              chunkCfg.validateTarget,
+              "--remote",
+              "--workdir",
+              chunkRemoteWorkdir,
+            ]
+          : ["validate", "--remote", "--workdir", chunkRemoteWorkdir];
         console.log(
           c.dim(
-            `  ☁️  Chunk: validate --remote${chunkCfg.validateTarget ? ` (${chunkCfg.validateTarget})` : ""} (timeout: ${chunkCfg.remoteValidateTimeoutSeconds}s)...`,
+            `  ☁️  Chunk: validate --remote${chunkCfg.validateTarget ? ` (${chunkCfg.validateTarget})` : ""} @ ${chunkRemoteWorkdir} (timeout: ${chunkCfg.remoteValidateTimeoutSeconds}s)...`,
           ),
         );
         const remoteResult = await runChunkWithTimeout(
           validateArgs,
-          workingDirectory,
+          chunkCwd,
           chunkCfg.remoteValidateTimeoutSeconds,
         );
         if (!remoteResult.pass) {
@@ -551,6 +774,7 @@ export async function runReviewGate(
           }
         } else {
           console.log(c.green("  ✓ Chunk validate --remote passed"));
+          writeSidecarAttestationMarker(workingDirectory);
         }
       }
     }
@@ -588,6 +812,85 @@ export async function runReviewGate(
     chunkRemoteTimedOut,
     durationMs,
   };
+}
+
+/**
+ * Write a slim-CI attestation marker after a successful Chunk validate --remote.
+ * Committed with the run so experiment-branch CircleCI can trust inner-loop green.
+ */
+export function writeSidecarAttestationMarker(workingDirectory: string): void {
+  const dir = path.join(workingDirectory, ".ralphci");
+  mkdirSync(dir, { recursive: true });
+  const markerPath = path.join(dir, "sidecar-validate.ok");
+  writeFileSync(markerPath, `${new Date().toISOString()}\n`, "utf-8");
+  try {
+    execSync(`git add "${markerPath}"`, {
+      cwd: workingDirectory,
+      encoding: "utf-8",
+    });
+  } catch {
+    // Non-fatal — marker still on disk for local inspection
+  }
+}
+
+/**
+ * True when Chunk sidecar produced sync/validate output suitable for CI Doctor
+ * (remote steps ran — not lenient-skip for missing CLI).
+ */
+export function chunkSidecarProducedDoctorLogs(
+  result: ReviewGateResult,
+): boolean {
+  if (result.chunkSidecarSkipped) {
+    return false;
+  }
+  return (
+    result.chunkSyncError != null ||
+    result.chunkRemoteError != null ||
+    result.chunkRemoteTimedOut
+  );
+}
+
+/**
+ * Markdown-style log bundle for CI Doctor when Chunk (sync and/or validate --remote) failed.
+ */
+export function buildChunkSidecarDoctorLogs(
+  result: ReviewGateResult,
+): string | null {
+  if (!chunkSidecarProducedDoctorLogs(result)) {
+    return null;
+  }
+  const lines: string[] = [
+    "## Chunk sidecar (Review Gate — mini-CI)",
+    "",
+    "RalphCI ran **Chunk** remote steps (`chunk sidecar sync` and/or **`chunk validate --remote`**) after local format/lint/tests. Treat stderr/stdout below like a CI job log.",
+    "",
+  ];
+  if (result.chunkSyncError) {
+    lines.push("### Workspace sync");
+    lines.push("");
+    lines.push("```");
+    lines.push(result.chunkSyncError);
+    lines.push("```");
+    lines.push("");
+  }
+  if (result.chunkRemoteTimedOut) {
+    lines.push("### validate --remote (timed out)");
+    lines.push("");
+    if (result.chunkRemoteError) {
+      lines.push("```");
+      lines.push(result.chunkRemoteError);
+      lines.push("```");
+      lines.push("");
+    }
+  } else if (result.chunkRemoteError) {
+    lines.push("### validate --remote");
+    lines.push("");
+    lines.push("```");
+    lines.push(result.chunkRemoteError);
+    lines.push("```");
+    lines.push("");
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -654,10 +957,10 @@ export function buildReviewGateFeedback(result: ReviewGateResult): string {
   }
 
   if (result.chunkSyncError) {
-    lines.push("### Chunk sidecar sync failed");
+    lines.push("### Chunk sidecar workspace upload failed");
     lines.push("");
     lines.push(
-      "Remote validation could not run until the workspace is synced to the sidecar.",
+      "Remote validation could not run until the workspace is copied to the sidecar.",
     );
     lines.push("");
     lines.push("```");

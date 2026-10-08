@@ -1,8 +1,116 @@
+import path from "path";
+import { fileURLToPath } from "url";
 import { describe, it, expect } from "vitest";
-import { buildReviewGateFeedback } from "./review-gate.js";
+import {
+  buildChunkSidecarDoctorLogs,
+  buildReviewGateFeedback,
+  chunkSidecarProducedDoctorLogs,
+  resolveChunkRemoteWorkdir,
+  resolveReviewGateTestFilter,
+} from "./review-gate.js";
+
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+
+describe("resolveChunkRemoteWorkdir", () => {
+  it("uses override when set", () => {
+    expect(resolveChunkRemoteWorkdir("/any/path", "./workspace/custom")).toBe(
+      "./workspace/custom",
+    );
+  });
+
+  it("defaults to ./workspace/<basename> of nearest package root", () => {
+    const experiment = path.join(
+      repoRoot,
+      "experiments",
+      "w_chunk-sidecars",
+      "iteration-1",
+    );
+    const expected = `./workspace/${path.basename(repoRoot)}`;
+    expect(resolveChunkRemoteWorkdir(experiment)).toBe(expected);
+  });
+});
+
+describe("resolveReviewGateTestFilter", () => {
+  it("returns null for repo root (full suite)", () => {
+    expect(resolveReviewGateTestFilter(repoRoot)).toBeNull();
+  });
+
+  it("scopes experiment run folders", () => {
+    const runDir = path.join(
+      repoRoot,
+      "experiments",
+      "cost-of-a-green-pr",
+      "runs",
+      "control",
+      "calibration",
+    );
+    expect(resolveReviewGateTestFilter(runDir)).toBe(
+      "experiments/cost-of-a-green-pr/runs/control/calibration",
+    );
+  });
+
+  it("scopes feature iteration folders", () => {
+    const runDir = path.join(
+      repoRoot,
+      "experiments",
+      "w_chunk-sidecars",
+      "iteration-1",
+    );
+    expect(resolveReviewGateTestFilter(runDir)).toBe(
+      "experiments/w_chunk-sidecars/iteration-1",
+    );
+  });
+
+  it("returns null for unrelated subfolders", () => {
+    expect(resolveReviewGateTestFilter(path.join(repoRoot, "src"))).toBeNull();
+  });
+});
+
+const baseChunkGate = {
+  passed: false as const,
+  formatFixApplied: false,
+  formatError: null as string | null,
+  lintFixApplied: false,
+  lintError: null as string | null,
+  testsPass: true,
+  testError: null as string | null,
+  testTimedOut: false,
+  chunkRemotePass: false,
+  chunkSidecarSkipped: false,
+  chunkSidecarSkipReason: null as string | null,
+  chunkSyncError: null as string | null,
+  chunkRemoteError: null as string | null,
+  chunkRemoteTimedOut: false,
+  durationMs: 1,
+};
+
+describe("chunkSidecarProducedDoctorLogs / buildChunkSidecarDoctorLogs", () => {
+  it("returns false / null when sidecar was skipped", () => {
+    const r = {
+      ...baseChunkGate,
+      chunkSidecarSkipped: true,
+      chunkSidecarSkipReason: "no chunk",
+      chunkSyncError: "would be ignored",
+    };
+    expect(chunkSidecarProducedDoctorLogs(r)).toBe(false);
+    expect(buildChunkSidecarDoctorLogs(r)).toBeNull();
+  });
+
+  it("bundles sync error for CI Doctor", () => {
+    const r = { ...baseChunkGate, chunkSyncError: "rsync: connection refused" };
+    expect(chunkSidecarProducedDoctorLogs(r)).toBe(true);
+    const logs = buildChunkSidecarDoctorLogs(r);
+    expect(logs).toContain("Workspace sync");
+    expect(logs).toContain("rsync: connection refused");
+  });
+});
 
 describe("buildReviewGateFeedback", () => {
-  it("includes Chunk sync failure section", () => {
+  it("includes Chunk workspace upload failure section", () => {
     const feedback = buildReviewGateFeedback({
       passed: false,
       formatFixApplied: false,
@@ -20,7 +128,7 @@ describe("buildReviewGateFeedback", () => {
       chunkRemoteTimedOut: false,
       durationMs: 100,
     });
-    expect(feedback).toContain("### Chunk sidecar sync failed");
+    expect(feedback).toContain("### Chunk sidecar workspace upload failed");
     expect(feedback).toContain("sync failed: no network");
   });
 

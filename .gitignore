@@ -1,12 +1,38 @@
 node_modules/
 dist/
 .cache/
+package-lock.json
 *.log
 !experiments/**/terminal_output.log
+!features/**/terminal_output.log
 .DS_Store
+**/._*
 .pnpm-store/
 .claude/
 features/
 .env
 .env.*
+
+# Experiment run local artifacts (not source — do not commit)
+experiments/**/node_modules/
+experiments/**/.claude/
+experiments/**/LIVE-console.log
+experiments/**/console-*.log
+
+# chunk active sidecar tracking
+.chunk/sidecar.json
+.chunk/sidecar.*.json
+
+# Chunk remote bootstrap (Node tarball + extracted files)
+.chunk-node/
+
+# Review Gate runtime test scoping (written during ralphci run)
+.ralphci/
+
+# CircleCI Smarter Testing local state / doctor artifacts
+.circleci/state-*/
+.circleci/impact-doctor-*.json
 test-results/
+
+# Cursor / VS Code multi-root workspace files
+*.code-workspace

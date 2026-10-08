@@ -1,0 +1,33 @@
+{
+  "commands": [
+    {
+      "name": "install",
+      "run": "sh scripts/chunk-remote-env.sh pnpm install --frozen-lockfile --child-concurrency 2"
+    },
+    {
+      "name": "lint",
+      "run": "sh scripts/chunk-remote-env.sh pnpm lint",
+      "role": "gate",
+      "timeout": 300,
+      "limit": 3
+    },
+    {
+      "name": "test",
+      "run": "sh scripts/chunk-remote-env.sh pnpm test:run",
+      "role": "gate",
+      "timeout": 300,
+      "limit": 3
+    },
+    {
+      "name": "build",
+      "run": "sh scripts/chunk-remote-env.sh pnpm build",
+      "role": "gate",
+      "timeout": 300,
+      "limit": 3
+    }
+  ],
+  "vcs": {
+    "org": "CircleCI-Research",
+    "repo": "ralph-ci"
+  }
+}

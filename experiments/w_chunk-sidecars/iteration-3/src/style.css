@@ -1,0 +1,134 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: #0a0a0a;
+  color: #00ff41;
+  font-family: "Courier New", Courier, monospace;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+#game-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  background-color: #111111;
+  border: 2px solid #00ff41;
+  border-radius: 4px;
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+}
+
+h1 {
+  font-size: 2.5rem;
+  letter-spacing: 0.5rem;
+  text-transform: uppercase;
+  text-shadow: 0 0 10px #00ff41;
+}
+
+#score-display {
+  font-size: 1.25rem;
+  letter-spacing: 0.1rem;
+  text-transform: uppercase;
+}
+
+#score {
+  color: #ffffff;
+  font-weight: bold;
+}
+
+#game-canvas {
+  background-color: #000000;
+  border: 2px solid #00ff41;
+  display: block;
+  box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.2);
+}
+
+#start-message {
+  font-size: 1rem;
+  letter-spacing: 0.15rem;
+  text-transform: uppercase;
+  animation: blink 1.2s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+#game-over {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: rgba(0, 0, 0, 0.92);
+  border: 2px solid #ff003c;
+  padding: 32px 48px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 0 30px rgba(255, 0, 60, 0.5);
+  z-index: 10;
+}
+
+#game-over h2 {
+  font-size: 2rem;
+  color: #ff003c;
+  text-transform: uppercase;
+  letter-spacing: 0.3rem;
+  text-shadow: 0 0 10px #ff003c;
+}
+
+#game-over p {
+  font-size: 1.1rem;
+  color: #00ff41;
+  letter-spacing: 0.1rem;
+}
+
+#final-score {
+  color: #ffffff;
+  font-weight: bold;
+}
+
+#restart-btn {
+  background-color: transparent;
+  color: #00ff41;
+  border: 2px solid #00ff41;
+  padding: 10px 24px;
+  font-family: inherit;
+  font-size: 1rem;
+  letter-spacing: 0.15rem;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease-in-out,
+    color 0.15s ease-in-out;
+}
+
+#restart-btn:hover,
+#restart-btn:focus {
+  background-color: #00ff41;
+  color: #000000;
+  outline: none;
+}
+
+.hidden {
+  display: none !important;
+}

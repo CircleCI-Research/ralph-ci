@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snake</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="game">
+      <h1>Snake</h1>
+      <div class="hud">
+        <div class="score">Score: <span id="score">0</span></div>
+      </div>
+      <canvas id="game-canvas" width="400" height="400"></canvas>
+      <div id="start-overlay" class="start-overlay" aria-hidden="false">
+        <h2>Snake</h2>
+        <p>Press SPACE to start</p>
+        <p class="overlay-hint">Use arrow keys to move</p>
+      </div>
+      <div id="game-over" class="game-over hidden" aria-hidden="true">
+        <h2>Game Over</h2>
+        <p>Final score: <span id="final-score">0</span></p>
+        <button id="restart-button" type="button">Restart</button>
+        <p class="overlay-hint">or press SPACE</p>
+      </div>
+      <p class="instructions">
+        Use arrow keys to move. SPACE to start / restart.
+      </p>
+    </main>
+    <script type="module" src="game.js"></script>
+  </body>
+</html>

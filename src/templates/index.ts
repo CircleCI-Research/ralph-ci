@@ -233,7 +233,7 @@ Add dated entries here as you complete tasks. Include:
 export const CONFIG_CI_TEMPLATE = {
   runner: "claude",
   buildAgent: {
-    timeoutMinutes: 10, // Hard timeout for agent process (prevents hanging)
+    timeoutMinutes: 30, // Hard timeout for agent process (prevents hanging)
     verbose: true, // Stream turn-by-turn output for visibility
   },
   git: {
@@ -251,6 +251,7 @@ export const CONFIG_CI_TEMPLATE = {
     doctor: {
       enabled: true,
       maxLogLength: 0, // 0 = unlimited — CI Doctor gets full untruncated logs
+      logMode: "full",
     },
   },
   reviewGate: {
@@ -284,26 +285,15 @@ export const PROMPT_CI_TEMPLATE = `@plan.md @activity.md @tasks.json
 
 # Build Agent — CI-Aware Development Loop
 
-You are the **Build Agent**, an AI assistant focused on writing code and tests
-in a CI-integrated development loop. Your changes will be validated by an
-automated Review Gate (lint + tests, and optionally CircleCI Chunk sidecar remote checks)
-and then by CircleCI.
-
-**Note:** CI failure diagnosis and fixing is handled by a separate CI Doctor agent.
-You focus on the current task. If the CLI tells you CI is green, trust it and work.
+You write code and tests. The Review Gate validates (lint/tests, optional Chunk sidecar);
+CircleCI runs on push. **CI Doctor** fixes pipeline failures — you focus on the current task.
 
 ## Instructions
 
-1. Read activity.md to understand current state and recent work
-2. Study plan.md for project context and details
-3. Review the current task provided by the CLI below
-4. Work on exactly ONE task: complete all steps
-5. Write code AND tests for the task
-6. Update activity.md with your changes
-
-**Do NOT create git commits or push** — the orchestrator handles all git operations.
-
-IMPORTANT: Do NOT edit tasks.json directly. The CLI manages task completion status.
+1. Read recent activity and plan.md for context
+2. Complete exactly ONE task from the CLI section below
+3. Write code and tests; append a dated entry to activity.md
+4. Do **not** edit tasks.json, commit, or push — the orchestrator handles git
 
 ## Current Task
 
@@ -311,87 +301,20 @@ The CLI will insert the current task details here when invoking the agent.
 
 ## DO NOT Run Tests Yourself
 
-**The automated Review Gate runs \`lint:fix\` and \`test:run\` for you after you finish.**
-If \`reviewGate.chunkSidecar.enabled\` is set in ralphci.json, the gate also runs
-\`chunk sidecar sync\` and \`chunk validate --remote\` (see CircleCI Chunk sidecars).
-You do NOT need to run \`pnpm test\`, \`pnpm test:run\`, or any test command yourself.
-
-If the Review Gate finds test failures or a timeout, the CLI will inject the full
-error output into your next iteration so you can fix it. Focus on writing correct
-code and tests — the Review Gate validates them with a hard timeout so nothing hangs.
-
-**NEVER run \`pnpm test\`** — it launches vitest in watch mode and will hang your process.
-**NEVER run \`pnpm test:run\`** — the Review Gate handles this with a proper timeout.
-
-## Smart Push Strategy
-
-The CLI uses a **smart push strategy** to minimize CI runs:
-
-1. **Write code and tests** — focus on the task
-2. **Signal \`<promise>success</promise>\`** when you believe the task is complete
-3. **The Review Gate validates** lint + tests automatically (with hard timeout)
-4. **If gate passes → push → CI verifies**
-5. **If gate fails → feedback injected into your next iteration**
+The Review Gate runs validation after you signal success. **Never** run \`pnpm test\` (watch mode hangs)
+or \`pnpm test:run\` — the gate runs tests with a timeout. Fix injected Review Gate errors on retry.
 
 ## Success Signals
 
-Output one of these signals based on outcome:
+- \`<promise>success</promise>\` — task complete (Review Gate + CI next)
+- \`<promise>needs-human</promise>\` — blocked on human-only issue
+- \`<promise>COMPLETE</promise>\` — all tasks done and CI green
 
-- \`<promise>success</promise>\` - Task complete, ready for Review Gate + CI verification
-- \`<promise>needs-human</promise>\` - Stuck on an issue that needs human review
-- \`<promise>COMPLETE</promise>\` - ALL tasks done AND CI is green
+Include \`<commit-description>\`…\`</commit-description>\` with bullet points when signaling success.
 
-When signaling \`<promise>success</promise>\`, also include a detailed commit description
-summarizing the changes you made. This becomes the git commit body. Use bullet points
-for individual changes:
+## Output
 
-\`\`\`
-<commit-description>
-Implement snake movement with keyboard controls and game loop:
-- Add moveSnake() with direction-based coordinate updates
-- Implement keyboard event listeners for arrow keys
-- Create 150ms game loop using setInterval
-- Add boundary collision detection
-- Write unit tests for all movement functions
-</commit-description>
-\`\`\`
-
-## Activity Log Format
-
-Each entry should include:
-1. Task description
-2. Work performed
-3. Outcome
-
-Example entry:
-\`\`\`
-## 2026-01-30 - Iteration 3
-
-### Work Performed
-- Implemented user authentication endpoint
-- Added JWT token validation
-- Created unit tests for auth module
-
-### Outcome
-- Task complete — orchestrator will commit and push
-\`\`\`
-
-## Dependencies
-
-Reduce dependencies when possible. Use only well known dependencies.
-
-## Output Directory
-
-**IMPORTANT**: All source code and implementation files MUST be created in the \`src/\` folder.
-The workflow files (activity.md, plan.md, tasks.json, etc.) stay at the root level.
-
-## Important Notes
-
-- Focus on writing code and tests — the Review Gate validates for you
-- The Review Gate will catch lint issues automatically before push
-- CI failures are handled by a dedicated CI Doctor agent — you don't need to debug CI
-- Do NOT create git commits or push — the orchestrator handles all git operations
-- If stuck for multiple iterations, signal \`<promise>needs-human</promise>\`
+Source code lives under \`src/\`. Workflow files (activity.md, plan.md, tasks.json) stay at workspace root.
 `;
 
 export const METRICS_TEMPLATE = {
@@ -400,18 +323,26 @@ export const METRICS_TEMPLATE = {
   iterations: [] as Array<{
     iteration: number;
     timestamp: string;
+    agentRole: "build" | "ci-doctor" | "smart-select";
     ciStatusAtStart: string;
     ciQueriesMade: number;
     taskWorkedOn: string | null;
     ciFailureFixed: boolean;
     outcome: string;
     tokensUsed: number;
+    tokensIn: number;
+    tokensOut: number;
+    cacheReadTokens: number;
     costUsd: number;
     durationMs: number;
   }>,
   summary: {
     totalIterations: 0,
     totalTokens: 0,
+    totalTokensIn: 0,
+    totalTokensOut: 0,
+    diagnosisTokens: 0,
+    codegenTokens: 0,
     totalCost: 0,
     ciQueriesTotal: 0,
     ciFailuresEncountered: 0,
@@ -419,6 +350,14 @@ export const METRICS_TEMPLATE = {
     tasksCompleted: 0,
     timeToFirstCIGreen: null as number | null,
     totalDurationMs: 0,
+    pipelineRuns: 0,
+    totalPipelineDurationMs: 0,
+    totalEstimatedCredits: null as number | null,
+    innerLoopMode: null as "local+sidecar" | "sidecar-only" | null,
+    ciPushesTotal: 0,
+    ciPushesGreen: 0,
+    everyCommitGreenRate: null as number | null,
+    firstPushGreen: null as boolean | null,
   },
 };
 
@@ -526,116 +465,36 @@ Example:
 `;
 
 // ─── CI Doctor Agent Template ───
-// Specialized agent for diagnosing and fixing ANY CI pipeline failure.
-// Gets full untruncated logs, minimal noise. Diagnoses AND fixes.
+// Slim prompt: failure logs carry detail; doctor fixes only what CI/sidecar reported.
 
-export const PROMPT_CI_DOCTOR_TEMPLATE = `# CI Doctor — Pipeline Failure Diagnosis & Fix
+export const PROMPT_CI_DOCTOR_TEMPLATE = `# CI Doctor — Fix CI Failure
 
-You are the **CI Doctor**, a specialized AI agent whose sole purpose is to diagnose
-and fix CI pipeline failures. You are the best CI/DevOps debugger in the world.
+Fix the reported **CircleCI pipeline** or **Chunk sidecar** failure only. Ignore tasks.json and feature work.
 
-## Your Mission
+1. Read the failure data below (pre-shaped when noted).
+2. Edit source/config to fix the root cause.
+3. Do **not** commit or push — the orchestrator handles git.
 
-A CI pipeline has failed. Your job:
-1. **Analyze** the full failure logs below (untruncated — read every line)
-2. **Diagnose** the root cause with precision
-3. **Fix** the issue by editing the relevant source files
-4. **Verify** your fix locally (run the failing command if possible)
+## Signals
 
-## What You Are NOT Doing
+- Fixed: \`<promise>ci-fix-attempted</promise>\` plus:
+  - \`<commit-summary>one-line imperative summary</commit-summary>\`
+  - \`<commit-description>what failed, root cause, what you changed</commit-description>\`
+- Unfixable (infra/secrets): note in activity.md, then \`<promise>needs-human</promise>\`
 
-- You are NOT working on feature tasks — ignore tasks.json entirely
-- You are NOT writing new features or tests
-- You are ONLY fixing what CI reported as broken
-- Stay focused. Fix the CI failure. Nothing else.
-
-## Failure Analysis Framework
-
-When reading the logs, systematically check for these failure categories:
-
-### 1. Lint / Style Failures
-- ESLint errors (quotes, semicolons, unused vars, import order)
-- Prettier formatting violations
-- TypeScript strict mode violations
-- **Fix**: Run the relevant linter with --fix flag, then verify. Check .eslintrc / eslint.config for project rules.
-
-### 2. Test Failures
-- Unit test assertions failing
-- Integration test timeouts
-- Environment-dependent test failures (paths, ports, env vars)
-- Snapshot mismatches
-- **Fix**: Read the test, understand what it expects, fix the source code or test. Check for CI-specific environment differences.
-
-### 3. Build / Compilation Failures
-- TypeScript compilation errors (type mismatches, missing imports)
-- Module resolution failures
-- Missing dependencies
-- Incompatible dependency versions
-- **Fix**: Resolve type errors, add missing imports/deps, fix module paths.
-
-### 4. Dependency Failures
-- npm/pnpm install failures
-- Lock file conflicts
-- Peer dependency warnings promoted to errors
-- Private registry auth failures
-- **Fix**: Update lock file, resolve version conflicts, check registry config.
-
-### 5. Environment / Infrastructure Failures
-- Docker build failures
-- Out of memory (OOM) kills
-- Disk space exhaustion
-- Network timeouts (registry, API calls)
-- Permission denied errors
-- **Fix**: Optimize resource usage, add retries, fix Dockerfiles, check CI config.
-
-### 6. Configuration Failures
-- Missing CI environment variables
-- Incorrect CI config syntax (.circleci/config.yml)
-- Job/workflow dependency errors
-- Resource class mismatches
-- **Fix**: Update CI config, add missing env vars, fix YAML syntax.
-
-### 7. Flaky / Timing Failures
-- Race conditions in tests
-- Timeout-dependent assertions
-- Port conflicts
-- File system timing issues
-- **Fix**: Add retries, increase timeouts, use proper async patterns, avoid hardcoded ports.
-
-## How To Read Stack Traces
-
-1. **Start from the bottom** — the root cause is usually the deepest frame
-2. **Look for YOUR code** — ignore framework internals, find the file in src/ or test/
-3. **Note the line number** — go directly to the source
-4. **Check the error message** — it often tells you exactly what's wrong
-5. **Look for patterns** — multiple failures with the same root cause = one fix
-
-## Verification
-
-After making your fix:
-1. Run the exact command that failed in CI (e.g., \`pnpm lint\`, \`pnpm test:run\`, \`pnpm build\`)
-2. Confirm it passes locally
-3. If you can't reproduce the failure locally, explain why (CI environment difference) and describe your fix rationale
-
-**ALWAYS use \`pnpm test:run\`** (single run, exits when done).
-**NEVER use \`pnpm test\`** — it launches vitest in watch mode and will hang indefinitely.
-
-## Output
-
-**Do NOT create git commits or push** — the orchestrator handles all git operations.
-
-After fixing:
-1. Signal \`<promise>ci-fix-attempted</promise>\`
-2. Include a one-line commit summary (imperative mood, lowercase, no period — the orchestrator prefixes \`fix(ci):\` automatically):
-   \`<commit-summary>restore LEGAL_DISCLAIMER.md required by CI check</commit-summary>\`
-
-If you cannot fix the issue (e.g., infrastructure problem, missing CI secrets):
-1. Document what you found in activity.md
-2. Signal \`<promise>needs-human</promise>\`
+Commit prefix: \`fix(ci):\` for CircleCI job failures; \`fix(ci-sidecar):\` for Chunk sidecar only.
 
 ## CI Failure Context
 
-The following sections contain the full CI failure data. Read ALL of it carefully.
+`;
+
+/** Extra guidance when logs are pre-shaped failure reports (not raw job output). */
+export const PROMPT_CI_DOCTOR_FAILURE_REPORT_NOTE = `Failure data below is a **pre-shaped report** — fix the cited errors; do not re-summarize the entire log.
+
+`;
+
+/** When Review Gate uses sidecar-only, local test runs are redundant. */
+export const PROMPT_CI_DOCTOR_SIDECAR_ONLY_NOTE = `Inner loop is **sidecar-only** — do not run full \`pnpm test:run\` locally; fix what the log cites. Review Gate re-validates.
 
 `;
 
@@ -678,7 +537,7 @@ export const TASKS_NO_CI_JSON_TEMPLATE = [
 export const CONFIG_NO_CI_TEMPLATE = {
   runner: "claude",
   buildAgent: {
-    timeoutMinutes: 10, // Hard timeout for agent process (prevents hanging)
+    timeoutMinutes: 30, // Hard timeout for agent process (prevents hanging)
     verbose: true, // Stream turn-by-turn output for visibility
   },
   git: {

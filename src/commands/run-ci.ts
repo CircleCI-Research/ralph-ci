@@ -1,11 +1,21 @@
 import path from "path";
 import fs from "fs";
-import { execSync, spawnSync, spawn, ChildProcess } from "child_process";
+import { randomBytes } from "crypto";
+import { tmpdir } from "os";
+import {
+  execSync,
+  execFileSync,
+  spawnSync,
+  spawn,
+  ChildProcess,
+} from "child_process";
 import { FileSystem, DefaultFileSystem } from "../utils/file-helpers.js";
 import {
   PROMPT_CI_TEMPLATE,
   PROMPT_NO_CI_TEMPLATE,
   PROMPT_CI_DOCTOR_TEMPLATE,
+  PROMPT_CI_DOCTOR_FAILURE_REPORT_NOTE,
+  PROMPT_CI_DOCTOR_SIDECAR_ONLY_NOTE,
   METRICS_TEMPLATE,
 } from "../templates/index.js";
 import {
@@ -15,22 +25,52 @@ import {
   withSpinner,
 } from "../utils/terminal.js";
 import {
-  CIStatus,
   parseProjectSlug,
   fetchCIStatus,
-  fetchAllFailureLogs,
+  fetchFailureContext,
+  fetchPipelineUsage,
   pollUntilSettled,
+  type CIStatus,
+  type CIDoctorLogMode,
+  type FailureContextSource,
+  type PipelineUsage,
 } from "../utils/circleci-api.js";
 import {
   resolveReviewGateConfig,
   resolveCIDoctorConfig,
   resolveBuildAgentConfig,
+  resolvePreflightSurveyConfig,
+  type CIDoctorConfig,
+  type ReviewGateInnerLoop,
 } from "../utils/config.js";
+import {
+  generateValidationManifest,
+  injectValidationManifestIntoPrompt,
+  resolvePackageRoot,
+  VALIDATION_MANIFEST_REMINDER,
+  type ValidationManifest,
+} from "../utils/validation-manifest.js";
+import {
+  buildPreflightSurveyPrompt,
+  isPreflightCompleteSignal,
+} from "../utils/preflight-survey.js";
 import {
   runReviewGate,
   buildReviewGateFeedback,
+  buildChunkSidecarDoctorLogs,
+  resolveChunkRemoteWorkdir,
+  type ReviewGateResult,
 } from "../utils/review-gate.js";
 import { CIQueryCache } from "../utils/ci-cache.js";
+import { probeActiveSidecarHealth } from "../utils/chunk-sidecar-health.js";
+import {
+  buildCIDoctorFingerprintSkipNotice,
+  computeCIFailureFingerprint,
+} from "../utils/ci-failure-fingerprint.js";
+import {
+  startPreventSleep,
+  type PreventSleepHandle,
+} from "../utils/prevent-sleep.js";
 
 export interface RunCIOptions {
   workingDirectory: string;
@@ -48,6 +88,8 @@ export interface RunCIOptions {
   servePort?: number; // Port for local dev server (default: 3000)
   serveDirectory?: string; // Directory to serve (default: src)
   draftPR?: boolean; // Start PR as draft (default: true)
+  /** Prevent macOS sleep for the duration of the run (default: true) */
+  preventSleep?: boolean;
 }
 
 interface AttemptStats {
@@ -85,11 +127,50 @@ export interface CIConfig {
   branchStrategy: "feature-branch" | "direct-to-main";
 }
 
+/** When to push to origin during a run. Default: per-task (after each Review Gate green). */
+export type GitPushMode = "per-task" | "epilogue";
+
 export interface GitConfig {
   autoPush: boolean;
   pushOnLocalSuccess: boolean;
+  /**
+   * `per-task` — push after each Review Gate–green task (default).
+   * `epilogue` — local commits only until all tasks pass Review Gate, then one push
+   * (further pushes allowed only for post-epilogue CI Doctor / fix loops).
+   */
+  pushMode?: GitPushMode;
   /** Base branch for feature branch creation. "current" = branch at run start. Default: auto-detect main/master. */
   baseBranch?: string;
+}
+
+export function resolveGitPushMode(gitConfig: {
+  pushMode?: GitPushMode;
+}): GitPushMode {
+  return gitConfig.pushMode === "epilogue" ? "epilogue" : "per-task";
+}
+
+/**
+ * Whether a remote `git push` is allowed right now.
+ * In epilogue mode, pushes are deferred until `epilogueUnlocked` (all tasks locally green).
+ */
+export function shouldPushToRemote(
+  gitConfig: Pick<GitConfig, "autoPush" | "pushMode">,
+  epilogueUnlocked: boolean,
+): boolean {
+  if (!gitConfig.autoPush) return false;
+  if (resolveGitPushMode(gitConfig) === "epilogue" && !epilogueUnlocked) {
+    return false;
+  }
+  return true;
+}
+
+export function describePushStrategy(gitConfig: GitConfig): string {
+  if (resolveGitPushMode(gitConfig) === "epilogue") {
+    return "epilogue (one push after all tasks pass Review Gate)";
+  }
+  return gitConfig.pushOnLocalSuccess
+    ? "on local success only (smart)"
+    : "every commit (chatty)";
 }
 
 export interface ServeConfig {
@@ -98,24 +179,52 @@ export interface ServeConfig {
   directory: string; // Relative to workingDirectory
 }
 
+export type AgentRole = "build" | "ci-doctor" | "smart-select";
+
+export interface IterationStepTimings {
+  prefetchMs?: number;
+  ciPollMs?: number;
+  doctorMs?: number;
+  buildAgentMs?: number;
+  reviewGateMs?: number;
+}
+
+export interface IterationMetric {
+  iteration: number;
+  timestamp: string;
+  agentRole: AgentRole;
+  ciStatusAtStart: string;
+  ciQueriesMade: number;
+  taskWorkedOn: string | null;
+  ciFailureFixed: boolean;
+  outcome: string;
+  tokensUsed: number;
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  durationMs: number;
+  wallClockMs?: number;
+  failureContextChars?: number;
+  logMode?: CIDoctorLogMode;
+  pipelineNumber?: number;
+  pipelineDurationMs?: number;
+  estimatedCredits?: number | null;
+  creditsComplete?: boolean;
+  stepTimings?: IterationStepTimings;
+}
+
 export interface Metrics {
   startTime: string | null;
   endTime: string | null;
-  iterations: Array<{
-    iteration: number;
-    timestamp: string;
-    ciStatusAtStart: string;
-    ciQueriesMade: number;
-    taskWorkedOn: string | null;
-    ciFailureFixed: boolean;
-    outcome: string;
-    tokensUsed: number;
-    costUsd: number;
-    durationMs: number;
-  }>;
+  iterations: IterationMetric[];
   summary: {
     totalIterations: number;
     totalTokens: number;
+    totalTokensIn: number;
+    totalTokensOut: number;
+    diagnosisTokens: number;
+    codegenTokens: number;
     totalCost: number;
     ciQueriesTotal: number;
     ciFailuresEncountered: number;
@@ -123,6 +232,14 @@ export interface Metrics {
     tasksCompleted: number;
     timeToFirstCIGreen: number | null;
     totalDurationMs: number;
+    pipelineRuns: number;
+    totalPipelineDurationMs: number;
+    totalEstimatedCredits: number | null;
+    innerLoopMode: ReviewGateInnerLoop | null;
+    ciPushesTotal: number;
+    ciPushesGreen: number;
+    everyCommitGreenRate: number | null;
+    firstPushGreen: boolean | null;
   };
 }
 
@@ -458,11 +575,202 @@ export function markTaskComplete(
 export interface InjectedCIStatus {
   status: CIStatus;
   failureLogs: string | null;
+  /**
+   * Chunk `validate --remote` / sync failure output from the Review Gate (sidecar microbuild).
+   * Merged into CI Doctor prompts like CircleCI job logs.
+   */
+  chunkSidecarFailureLogs?: string | null;
+  logMode?: CIDoctorLogMode;
+  failureContextChars?: number;
+  failureContextSource?: FailureContextSource;
+  pipelineUsage?: PipelineUsage | null;
+}
+
+export interface AgentUsageLike {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+}
+
+export function buildIterationMetric(args: {
+  iteration: number;
+  agentRole: AgentRole;
+  ciStatusAtStart: string;
+  ciQueriesMade: number;
+  taskWorkedOn: string | null;
+  ciFailureFixed: boolean;
+  outcome: string;
+  costUsd: number;
+  durationMs: number;
+  usage?: AgentUsageLike;
+  injectedCI?: InjectedCIStatus | null;
+  wallClockMs?: number;
+  stepTimings?: IterationStepTimings;
+  logMode?: CIDoctorLogMode;
+  failureContextChars?: number;
+}): IterationMetric {
+  const tokensIn = args.usage?.input_tokens ?? 0;
+  const tokensOut = args.usage?.output_tokens ?? 0;
+  const cacheReadTokens = args.usage?.cache_read_input_tokens ?? 0;
+  const usage = args.injectedCI?.pipelineUsage;
+  return {
+    iteration: args.iteration,
+    timestamp: new Date().toISOString(),
+    agentRole: args.agentRole,
+    ciStatusAtStart: args.ciStatusAtStart,
+    ciQueriesMade: args.ciQueriesMade,
+    taskWorkedOn: args.taskWorkedOn,
+    ciFailureFixed: args.ciFailureFixed,
+    outcome: args.outcome,
+    tokensUsed: tokensIn + tokensOut,
+    tokensIn,
+    tokensOut,
+    cacheReadTokens,
+    costUsd: args.costUsd,
+    durationMs: args.durationMs,
+    wallClockMs: args.wallClockMs,
+    failureContextChars:
+      args.injectedCI?.failureContextChars ?? args.failureContextChars,
+    logMode: args.injectedCI?.logMode ?? args.logMode,
+    pipelineNumber: args.injectedCI?.status.pipelineNumber,
+    pipelineDurationMs: usage?.totalDurationMs,
+    estimatedCredits: usage?.estimatedCredits,
+    creditsComplete: usage?.creditsComplete,
+    stepTimings: args.stepTimings,
+  };
+}
+
+/** Whether to poll CircleCI at end of iteration (after push or running pipeline). */
+export function shouldPollCIAfterIteration(args: {
+  ciEnabled: boolean;
+  pushedThisIteration: boolean;
+  ciWasRunningAtStart: boolean;
+}): boolean {
+  if (!args.ciEnabled) return false;
+  if (args.pushedThisIteration) return true;
+  return args.ciWasRunningAtStart;
+}
+
+/** Copy pipeline usage / failure context from a CI prefetch onto an iteration row. */
+export function applyInjectedCIToIterationMetric(
+  metric: IterationMetric,
+  injected: InjectedCIStatus,
+): void {
+  if (typeof injected.failureContextChars === "number") {
+    metric.failureContextChars = injected.failureContextChars;
+  }
+  if (injected.logMode) {
+    metric.logMode = injected.logMode;
+  }
+  if (typeof injected.status.pipelineNumber === "number") {
+    metric.pipelineNumber = injected.status.pipelineNumber;
+  }
+  const usage = injected.pipelineUsage;
+  if (usage) {
+    metric.pipelineDurationMs = usage.totalDurationMs;
+    metric.estimatedCredits = usage.estimatedCredits;
+    metric.creditsComplete = usage.creditsComplete;
+  }
+}
+
+export function maybeMarkFirstCIGreen(
+  metrics: Metrics,
+  injectedCI: InjectedCIStatus | null,
+): void {
+  if (
+    injectedCI?.status.status === "success" &&
+    metrics.summary.timeToFirstCIGreen === null &&
+    metrics.startTime
+  ) {
+    metrics.summary.timeToFirstCIGreen =
+      Date.now() - new Date(metrics.startTime).getTime();
+  }
+}
+
+/** Track push-level CI green rate for per-task vs single-push arms. */
+export function recordCIPushOutcome(
+  metrics: Metrics,
+  gitConfig: GitConfig,
+  injectedCI: InjectedCIStatus | null,
+  options?: { isFirstEpiloguePush?: boolean },
+): void {
+  if (!injectedCI) return;
+  const status = injectedCI.status.status;
+  if (status !== "success" && status !== "failed") return;
+
+  metrics.summary.ciPushesTotal += 1;
+  if (status === "success") {
+    metrics.summary.ciPushesGreen += 1;
+  }
+
+  if (
+    resolveGitPushMode(gitConfig) === "epilogue" &&
+    options?.isFirstEpiloguePush &&
+    metrics.summary.firstPushGreen === null
+  ) {
+    metrics.summary.firstPushGreen = status === "success";
+  }
 }
 
 /**
  * Build the prompt content for CI-aware or local-only workflow.
  */
+export interface BuildPromptContentOptions {
+  /** Inject full manifest on first task; later iterations get a one-line reminder. Default true. */
+  includeValidationManifest?: boolean;
+  /** Inline only the last N lines of activity.md instead of @-loading the full file. Default 150. */
+  activityRecentLineLimit?: number;
+}
+
+const DEFAULT_ACTIVITY_RECENT_LINE_LIMIT = 150;
+
+const COMMIT_DESCRIPTION_FOOTER = `
+
+## Commit Description
+
+When you complete a task, include a detailed commit description summarizing
+your changes. The orchestrator uses this as the git commit body. Use imperative
+mood and bullet points:
+
+\`\`\`
+<commit-description>
+Implement snake movement with keyboard controls and game loop:
+- Add moveSnake() with direction-based coordinate updates
+- Implement keyboard event listeners for arrow keys
+- Create 150ms game loop using setInterval
+- Add boundary collision detection
+- Write unit tests for all movement functions
+</commit-description>
+\`\`\`
+`;
+
+async function inlineRecentActivityInPrompt(
+  promptTemplate: string,
+  workingDirectory: string,
+  fs: FileSystem,
+  lineLimit: number,
+): Promise<string> {
+  if (!promptTemplate.includes("@activity.md")) {
+    return promptTemplate;
+  }
+  try {
+    const activity = await fs.readFile(
+      path.join(workingDirectory, "activity.md"),
+    );
+    const lines = activity.split("\n");
+    if (lines.length <= lineLimit) {
+      return promptTemplate;
+    }
+    const recent = lines.slice(-lineLimit).join("\n");
+    return promptTemplate.replace(
+      "@activity.md",
+      `## Recent activity (last ${lineLimit} of ${lines.length} lines; full log in activity.md)\n\n${recent}`,
+    );
+  } catch {
+    return promptTemplate;
+  }
+}
+
 export async function buildPromptContent(
   workingDirectory: string,
   task: Task,
@@ -470,8 +778,18 @@ export async function buildPromptContent(
   ciConfig: CIConfig,
   fs: FileSystem = new DefaultFileSystem(),
   injectedCI?: InjectedCIStatus,
-  gitConfig: GitConfig = { autoPush: true, pushOnLocalSuccess: true },
+  gitConfig: GitConfig = {
+    autoPush: true,
+    pushOnLocalSuccess: true,
+    pushMode: "per-task",
+  },
+  validationManifest?: ValidationManifest,
+  options: BuildPromptContentOptions = {},
 ): Promise<string> {
+  const includeValidationManifest = options.includeValidationManifest ?? true;
+  const activityRecentLineLimit =
+    options.activityRecentLineLimit ?? DEFAULT_ACTIVITY_RECENT_LINE_LIMIT;
+
   const promptPath = path.join(workingDirectory, "prompt.md");
   let promptTemplate: string;
 
@@ -483,6 +801,13 @@ export async function buildPromptContent(
       ? PROMPT_CI_TEMPLATE
       : PROMPT_NO_CI_TEMPLATE;
   }
+
+  promptTemplate = await inlineRecentActivityInPrompt(
+    promptTemplate,
+    workingDirectory,
+    fs,
+    activityRecentLineLimit,
+  );
 
   // Build the task section
   const taskSection = `
@@ -505,6 +830,27 @@ ${task.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}
     "The CLI will insert the current task details here when invoking the agent.",
     taskSection,
   );
+
+  if (validationManifest) {
+    const manifestMarkdown = includeValidationManifest
+      ? validationManifest.markdown
+      : VALIDATION_MANIFEST_REMINDER;
+    promptWithTask = injectValidationManifestIntoPrompt(
+      promptWithTask,
+      manifestMarkdown,
+    );
+  }
+
+  try {
+    const preflightNotes = await fs.readFile(
+      path.join(workingDirectory, "preflight.md"),
+    );
+    if (preflightNotes.trim().length > 0) {
+      promptWithTask = `@preflight.md\n\n${promptWithTask}`;
+    }
+  } catch {
+    // preflight.md optional until Preflight Survey runs
+  }
 
   // Only add CI context if CI is enabled
   if (ciConfig.enabled) {
@@ -530,6 +876,7 @@ ${task.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}
 
 - **Provider:** ${ciConfig.provider}
 - **Auto Push:** ${gitConfig.autoPush ? "enabled" : "disabled"}
+- **Push Mode:** ${describePushStrategy(gitConfig)}
 - **Require CI Green:** ${ciConfig.requireGreenBeforeComplete ? "yes" : "no"}
 - **Approval Gate:** ${ciConfig.approvalGateEnabled ? "enabled" : "disabled"}
 - **Branch Strategy:** ${ciConfig.branchStrategy}
@@ -540,6 +887,13 @@ ${task.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}
 - **Current Branch:** ${branch || "unknown"}
 - **Workspace Root:** ${workingDirectory}
 `;
+    if (resolveGitPushMode(gitConfig) === "epilogue") {
+      ciContextSection += `
+## Epilogue push mode
+
+The orchestrator commits locally after each Review Gate–green task and **does not push** until **all** tasks have passed Review Gate. Do **not** expect mid-run CI status. Outer CircleCI runs only after that single epilogue push (and any later fix pushes).
+`;
+    }
 
     // Add pre-fetched CI status if available
     if (injectedCI) {
@@ -583,7 +937,7 @@ ${ciStatus.failedJobs.map((j) => `- ${j.name} (#${j.jobNumber})`).join("\n")}
         ciContextSection += `
 ### CI Failure Logs
 
-**IMPORTANT: The following logs show why CI failed. Fix these issues before proceeding with the planned task.**
+CI Doctor handles failures when enabled. If you see logs here, fix them before the planned task.
 
 \`\`\`
 ${failureLogs}
@@ -593,12 +947,9 @@ ${failureLogs}
 
       if (ciStatus.status === "failed") {
         ciContextSection += `
-### ⚠️ CI FIX REQUIRED
+### CI failing
 
-CI is currently failing. You MUST fix the CI failure before working on the planned task.
-After fixing:
-1. Signal \`<promise>ci-fix-attempted</promise>\` to trigger a new CI run.
-2. Include a one-line commit summary (imperative mood, lowercase, no period — the orchestrator prefixes \`fix(ci):\` automatically): \`<commit-summary>brief description of fix</commit-summary>\`
+Fix the CI failure before the planned task, then signal \`<promise>ci-fix-attempted</promise>\` with \`<commit-summary>\` and \`<commit-description>\`.
 `;
       }
     }
@@ -614,28 +965,56 @@ After fixing:
     }
   }
 
-  // Always inject commit-description instruction (works with any prompt.md)
-  promptWithTask += `
-
-## Commit Description
-
-When you complete a task, include a detailed commit description summarizing
-your changes. The orchestrator uses this as the git commit body. Use imperative
-mood and bullet points:
-
-\`\`\`
-<commit-description>
-Implement snake movement with keyboard controls and game loop:
-- Add moveSnake() with direction-based coordinate updates
-- Implement keyboard event listeners for arrow keys
-- Create 150ms game loop using setInterval
-- Add boundary collision detection
-- Write unit tests for all movement functions
-</commit-description>
-\`\`\`
-`;
+  // Inject commit-description instruction only when the template lacks it
+  if (
+    !promptWithTask.includes("<commit-description>") &&
+    !promptWithTask.includes("## Commit Description")
+  ) {
+    promptWithTask += COMMIT_DESCRIPTION_FOOTER;
+  }
 
   return promptWithTask;
+}
+
+function isChunkSidecarOnlyDoctorContext(ci: InjectedCIStatus): boolean {
+  return (
+    !!ci.chunkSidecarFailureLogs &&
+    !ci.failureLogs &&
+    ci.status.status !== "failed"
+  );
+}
+
+/** CI Doctor prompt payload when only Chunk sidecar logs exist (or CI was not queried). */
+function buildChunkSidecarDoctorInjection(
+  injectedCI: InjectedCIStatus | null,
+  workingDirectory: string,
+  chunkLogs: string,
+): InjectedCIStatus {
+  if (injectedCI) {
+    return {
+      ...injectedCI,
+      chunkSidecarFailureLogs: chunkLogs,
+    };
+  }
+  let branch: string | undefined;
+  try {
+    branch = execSync("git branch --show-current", {
+      cwd: workingDirectory,
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    branch = undefined;
+  }
+  return {
+    status: {
+      status: "not_run",
+      branch,
+      message:
+        "No CircleCI pipeline context in this run (CI disabled or status unavailable). Fix the Chunk sidecar failure below.",
+    },
+    failureLogs: null,
+    chunkSidecarFailureLogs: chunkLogs,
+  };
 }
 
 /**
@@ -645,8 +1024,29 @@ Implement snake movement with keyboard controls and game loop:
 export function buildCIDoctorPrompt(
   injectedCI: InjectedCIStatus,
   workingDirectory: string,
+  options?: { innerLoop?: ReviewGateInnerLoop },
 ): string {
   let prompt = PROMPT_CI_DOCTOR_TEMPLATE;
+
+  if (injectedCI.logMode === "failure-report") {
+    prompt += PROMPT_CI_DOCTOR_FAILURE_REPORT_NOTE;
+  }
+  if (options?.innerLoop === "sidecar-only") {
+    prompt += PROMPT_CI_DOCTOR_SIDECAR_ONLY_NOTE;
+  }
+
+  if (isChunkSidecarOnlyDoctorContext(injectedCI)) {
+    prompt += `
+
+---
+
+### Context: Chunk sidecar (not a CircleCI job failure)
+
+Pipeline status below may be **green** or **not_run**. The actionable logs are from **Chunk \`validate --remote\`** (sidecar microbuild) during the Review Gate — treat them like CI job output (lint, test, install, config).
+
+When you signal \`<promise>ci-fix-attempted</promise>\`, the orchestrator records commits with subject prefix **\`fix(ci-sidecar):\`** (not \`fix(ci):\`).
+`;
+  }
 
   // Add git context
   let gitRemoteURL = "";
@@ -685,13 +1085,37 @@ ${injectedCI.status.failedJobs.map((j) => `- **${j.name}** (job #${j.jobNumber})
 `;
   }
 
-  // Add the full failure logs — untruncated
-  if (injectedCI.failureLogs) {
+  const circle = injectedCI.failureLogs;
+  const chunk = injectedCI.chunkSidecarFailureLogs;
+
+  if (circle && chunk) {
+    prompt += `
+### Full failure logs (CircleCI)
+
+\`\`\`
+${circle}
+\`\`\`
+
+### Chunk sidecar (\`validate --remote\` — mini-CI)
+
+\`\`\`
+${chunk}
+\`\`\`
+`;
+  } else if (circle) {
     prompt += `
 ### Full Failure Logs
 
 \`\`\`
-${injectedCI.failureLogs}
+${circle}
+\`\`\`
+`;
+  } else if (chunk) {
+    prompt += `
+### Chunk sidecar (\`validate --remote\` — mini-CI)
+
+\`\`\`
+${chunk}
 \`\`\`
 `;
   } else {
@@ -699,10 +1123,11 @@ ${injectedCI.failureLogs}
 ### Failure Logs
 
 No detailed failure logs were retrieved from the API.
-Try running the failing commands locally to reproduce:
-- \`pnpm lint\`
-- \`pnpm test:run\`
-- \`pnpm build\`
+${
+  options?.innerLoop === "sidecar-only"
+    ? "Fix from sidecar output above if present; Review Gate re-validates."
+    : "Try running the failing commands locally to reproduce (e.g. `pnpm lint`, `pnpm test:run`, `pnpm build`)."
+}
 `;
   }
 
@@ -718,11 +1143,20 @@ export async function runCIDoctor(
   injectedCI: InjectedCIStatus,
   runner: import("../utils/claude-runner.js").AgentRunner,
   model?: string,
+  options?: { banner?: string; innerLoop?: ReviewGateInnerLoop },
 ): Promise<import("../utils/claude-runner.js").AgentResponse> {
-  console.log(c.magenta("\n  ─── CI Doctor ───"));
-  console.log(c.magenta("  🏥 Diagnosing CI failure..."));
+  console.log(c.magenta(options?.banner ?? "\n  ─── CI Doctor ───"));
+  console.log(
+    c.magenta(
+      isChunkSidecarOnlyDoctorContext(injectedCI)
+        ? "  🏥 Diagnosing Chunk sidecar (validate --remote) failure..."
+        : "  🏥 Diagnosing CI failure...",
+    ),
+  );
 
-  const prompt = buildCIDoctorPrompt(injectedCI, workingDirectory);
+  const prompt = buildCIDoctorPrompt(injectedCI, workingDirectory, {
+    innerLoop: options?.innerLoop,
+  });
 
   printFullPrompt(prompt);
 
@@ -766,8 +1200,16 @@ export function updateMetricsSummary(
   metrics.summary.totalIterations = currentIteration;
   metrics.summary.totalTokens =
     cumulative.totalInputTokens + cumulative.totalOutputTokens;
+  metrics.summary.totalTokensIn = cumulative.totalInputTokens;
+  metrics.summary.totalTokensOut = cumulative.totalOutputTokens;
   metrics.summary.totalCost = cumulative.totalCost;
   metrics.summary.tasksCompleted = tasks.filter((t) => t.passes).length;
+  metrics.summary.diagnosisTokens = metrics.iterations
+    .filter((iter) => iter.agentRole === "ci-doctor")
+    .reduce((sum, iter) => sum + (iter.tokensUsed || 0), 0);
+  metrics.summary.codegenTokens = metrics.iterations
+    .filter((iter) => iter.agentRole === "build")
+    .reduce((sum, iter) => sum + (iter.tokensUsed || 0), 0);
 
   if (metrics.startTime) {
     metrics.summary.totalDurationMs =
@@ -787,6 +1229,37 @@ export function updateMetricsSummary(
   metrics.summary.ciFailuresFixed = metrics.iterations.filter(
     (iter) => iter.ciFailureFixed,
   ).length;
+
+  const latestUsageByPipeline = new Map<
+    number,
+    { durationMs: number; credits: number | null }
+  >();
+  for (const iter of metrics.iterations) {
+    if (typeof iter.pipelineNumber !== "number") continue;
+    if (typeof iter.pipelineDurationMs !== "number") continue;
+    latestUsageByPipeline.set(iter.pipelineNumber, {
+      durationMs: iter.pipelineDurationMs,
+      credits: iter.estimatedCredits ?? null,
+    });
+  }
+  metrics.summary.pipelineRuns = latestUsageByPipeline.size;
+  metrics.summary.totalPipelineDurationMs = [
+    ...latestUsageByPipeline.values(),
+  ].reduce((sum, row) => sum + row.durationMs, 0);
+  const creditValues = [...latestUsageByPipeline.values()]
+    .map((row) => row.credits)
+    .filter((n): n is number => typeof n === "number");
+  metrics.summary.totalEstimatedCredits =
+    creditValues.length === 0
+      ? null
+      : creditValues.reduce((sum, n) => sum + n, 0);
+
+  if (metrics.summary.ciPushesTotal > 0) {
+    metrics.summary.everyCommitGreenRate =
+      metrics.summary.ciPushesGreen / metrics.summary.ciPushesTotal;
+  } else {
+    metrics.summary.everyCommitGreenRate = null;
+  }
 }
 
 /**
@@ -818,6 +1291,65 @@ export function hasUncommittedChanges(workingDirectory: string): boolean {
 }
 
 /**
+ * Commit staged+unstaged changes (git add -A) with optional body and Co-authored-by.
+ * Uses `git commit -F` so multiline bodies are safe. Does not push.
+ *
+ * @returns true if a new commit was created, false on failure or nothing to commit.
+ */
+export function gitCommit(
+  workingDirectory: string,
+  message: string,
+  coAuthor?: string,
+  body?: string,
+): boolean {
+  const parts = [message];
+  if (body) parts.push(body);
+  if (coAuthor) parts.push(`Co-authored-by: ${coAuthor}`);
+  const fullMessage = parts.join("\n\n");
+
+  const msgPath = path.join(
+    tmpdir(),
+    `ralphci-commit-${process.pid}-${Date.now()}.txt`,
+  );
+  try {
+    fs.writeFileSync(msgPath, fullMessage, "utf8");
+    execSync("git add -A", { cwd: workingDirectory, encoding: "utf-8" });
+    execFileSync("git", ["commit", "-F", msgPath], {
+      cwd: workingDirectory,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch (error) {
+    console.log(
+      c.red(
+        `Git commit failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(msgPath);
+    } catch {
+      // ignore missing temp file
+    }
+  }
+}
+
+/** Push current branch to its upstream (typically `origin`). */
+export function gitPush(workingDirectory: string): void {
+  try {
+    execSync("git push", { cwd: workingDirectory, encoding: "utf-8" });
+  } catch (error) {
+    console.log(
+      c.red(
+        `Git push failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+  }
+}
+
+/**
  * Git commit and push changes.
  * Builds a conventional commit message: subject line, optional body,
  * and optional Co-authored-by trailer.
@@ -828,25 +1360,59 @@ export function gitCommitAndPush(
   coAuthor?: string,
   body?: string,
 ): void {
-  try {
-    const parts = [message];
-    if (body) parts.push(body);
-    if (coAuthor) parts.push(`Co-authored-by: ${coAuthor}`);
-    const fullMessage = parts.join("\n\n");
-
-    execSync("git add -A", { cwd: workingDirectory, encoding: "utf-8" });
-    execSync(`git commit -m "${fullMessage.replace(/"/g, '\\"')}"`, {
-      cwd: workingDirectory,
-      encoding: "utf-8",
-    });
-    execSync("git push", { cwd: workingDirectory, encoding: "utf-8" });
-  } catch (error) {
-    console.log(
-      c.red(
-        `Git operation failed: ${error instanceof Error ? error.message : String(error)}`,
-      ),
-    );
+  if (gitCommit(workingDirectory, message, coAuthor, body)) {
+    gitPush(workingDirectory);
   }
+}
+
+/** Which CI Doctor path produced the fix (drives conventional commit prefix). */
+export type CiDoctorCommitKind = "pipeline" | "sidecar";
+
+/**
+ * One-line subject for CI Doctor commits (`fix(ci):` vs `fix(ci-sidecar):`).
+ */
+export function buildCiDoctorCommitSubject(
+  kind: CiDoctorCommitKind,
+  summary: string | null,
+): string {
+  const prefix = kind === "pipeline" ? "fix(ci)" : "fix(ci-sidecar)";
+  const trimmed = summary?.trim();
+  if (trimmed) {
+    return `${prefix}: ${trimmed}`;
+  }
+  return kind === "pipeline"
+    ? "fix(ci): address pipeline failure"
+    : "fix(ci-sidecar): address Chunk sidecar validate failure";
+}
+
+/**
+ * Commit body for CI Doctor: optional agent `<commit-description>` plus a short
+ * orchestrator footer (Review Gate outcome, failing job names when pipeline).
+ */
+export function buildCiDoctorCommitBody(
+  kind: CiDoctorCommitKind,
+  agentDescription: string | null,
+  context: { gatePassed: boolean; failedJobNames?: string[] },
+): string {
+  const parts: string[] = [];
+  const desc = agentDescription?.trim();
+  if (desc) {
+    parts.push(desc);
+  }
+  const gatePhrase = context.gatePassed ? "passed" : "did not pass";
+  const tail =
+    kind === "pipeline"
+      ? `Review gate ${gatePhrase} after this CircleCI pipeline CI Doctor attempt.${
+          context.failedJobNames && context.failedJobNames.length > 0
+            ? ` Failing jobs: ${context.failedJobNames.join(", ")}.`
+            : ""
+        }`
+      : `Review gate ${gatePhrase} after this Chunk sidecar (\`validate --remote\`) CI Doctor attempt.`;
+  if (parts.length > 0) {
+    parts.push("");
+  }
+  parts.push(tail);
+  return parts.join("\n");
 }
 
 /**
@@ -877,6 +1443,46 @@ export function getCoAuthor(
 ): string {
   const raw = runtimeModel || config.model || "Claude";
   return `${prettifyModelId(raw)} <noreply@anthropic.com>`;
+}
+
+/** Build Agent outputs the CLI routes on one of these exact substrings. */
+export const ORCHESTRATOR_BUILD_AGENT_PROMISE_TAGS = [
+  "<promise>COMPLETE</promise>",
+  "<promise>success</promise>",
+  "<promise>ci-pending</promise>",
+  "<promise>ci-fix-attempted</promise>",
+  "<promise>needs-human</promise>",
+] as const;
+
+export function hasOrchestratorCompletionTag(agentOutput: string): boolean {
+  return ORCHESTRATOR_BUILD_AGENT_PROMISE_TAGS.some((tag) =>
+    agentOutput.includes(tag),
+  );
+}
+
+/** Stop the loop after this many consecutive no-tag replies on the same task. */
+export const MISSING_PROMISE_TAG_STREAK_EXIT = 12;
+
+export function buildMissingPromiseTagReminder(
+  taskIndexOneBased: number,
+  streakCount: number,
+  options?: { afk?: boolean },
+): string {
+  const humanLine =
+    options?.afk === true
+      ? "- `<promise>needs-human</promise>` — **disabled** (AFK / unattended). Do not use; keep working and use success / ci-fix-attempted / COMPLETE."
+      : "- `<promise>needs-human</promise>` — blocked; needs a person";
+  return `## Orchestrator: missing \`<promise>\` completion tag
+
+This is attempt **${streakCount}** on **task ${taskIndexOneBased}** with no recognized completion tag in your last message. The CLI cannot advance tasks or run the Review Gate until you end your reply with **exactly one** of these (verbatim):
+
+- \`<promise>success</promise>\` — task done and \`pnpm test:run\` passes locally
+- \`<promise>ci-fix-attempted</promise>\` — CI fix applied, ready for verification
+- \`<promise>ci-pending</promise>\` — waiting on CI results
+${humanLine}
+- \`<promise>COMPLETE</promise>\` — only when **all** tasks are finished **and** CI is green
+
+If you are still coding, continue working and end with the tag that matches your state (usually \`<promise>success</promise>\` once tests pass).`;
 }
 
 /**
@@ -962,6 +1568,42 @@ export async function loadUniqueId(
 }
 
 /**
+ * Load AFK mode from ralphci.json (`"afk": true`).
+ * When enabled, `<promise>needs-human</promise>` does not pause/exit the loop.
+ */
+export async function loadAfkMode(
+  workingDirectory: string,
+  fs: FileSystem = new DefaultFileSystem(),
+): Promise<boolean> {
+  try {
+    const configPath = path.join(workingDirectory, "ralphci.json");
+    const content = await fs.readFile(configPath);
+    const config = JSON.parse(content);
+    return config.afk === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load sleep prevention from ralphci.json (`"preventSleep": false` to disable).
+ * Defaults to true — long agent runs should not lose wall-clock time to idle sleep.
+ */
+export async function loadPreventSleepEnabled(
+  workingDirectory: string,
+  fs: FileSystem = new DefaultFileSystem(),
+): Promise<boolean> {
+  try {
+    const configPath = path.join(workingDirectory, "ralphci.json");
+    const content = await fs.readFile(configPath);
+    const config = JSON.parse(content);
+    return config.preventSleep !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Get the default branch name (main or master).
  */
 function getDefaultBranch(workingDirectory: string): string {
@@ -997,25 +1639,41 @@ function getDefaultBranch(workingDirectory: string): string {
 }
 
 /**
- * Compute the branch name from the working directory path and uniqueId.
+ * Short per-invocation id so re-runs never reuse a failed attempt's branch.
+ * 4 bytes → 8 hex chars (collision-resistant enough for lab runs).
+ */
+export function generateRunAttemptSuffix(byteLength = 4): string {
+  return randomBytes(byteLength).toString("hex");
+}
+
+/**
+ * Flatten path separators (`/` → `__`) for callers that still need a flat
+ * relative-path segment. Prefer {@link computeBranchName} for run branches.
+ */
+export function flattenPathForGitBranch(relativePath: string): string {
+  return relativePath
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\//g, "__");
+}
+
+/**
+ * Branch name for a RalphCI run: `experiment__{uniqueId}__{attempt}`.
+ *
+ * Uses a singular `experiment` prefix (not the working-dir path) so refs stay
+ * short and never nest under `git.baseBranch`. `uniqueId` already encodes
+ * study/arm/replicate; the attempt hash keeps re-runs unique.
  */
 export function computeBranchName(
-  workingDirectory: string,
+  _workingDirectory: string,
   uniqueId: string,
+  runAttemptSuffix: string = generateRunAttemptSuffix(),
 ): string {
-  try {
-    const repoRoot = execSync("git rev-parse --show-toplevel", {
-      cwd: workingDirectory,
-      encoding: "utf-8",
-    }).trim();
-    const relativePath = path.relative(
-      repoRoot,
-      path.resolve(workingDirectory),
-    );
-    return `${relativePath}__${uniqueId}`;
-  } catch {
-    return `${path.basename(workingDirectory)}__${uniqueId}`;
-  }
+  const id = uniqueId
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\//g, "__");
+  return `experiment__${id}__${runAttemptSuffix}`;
 }
 
 /**
@@ -1167,8 +1825,6 @@ export async function setupBranchAndPR(
   _fileSystem: FileSystem = new DefaultFileSystem(),
   baseBranchOverride?: string,
 ): Promise<{ branchName: string; prCreated: boolean } | null> {
-  const branchName = computeBranchName(workingDirectory, uniqueId);
-
   // Determine current branch
   let currentBranch = "";
   try {
@@ -1181,11 +1837,59 @@ export async function setupBranchAndPR(
     return null;
   }
 
-  // Already on the target branch — idempotent re-run
-  if (currentBranch === branchName) {
-    console.log(c.dim(`  Already on branch: ${branchName}`));
-    return { branchName, prCreated: false };
+  const branchExistsLocal = (name: string): boolean => {
+    try {
+      execSync(`git rev-parse --verify "${name}"`, {
+        cwd: workingDirectory,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const branchExistsRemote = (name: string): boolean => {
+    try {
+      const lsOutput = execSync(`git ls-remote --heads origin "${name}"`, {
+        cwd: workingDirectory,
+        encoding: "utf-8",
+      }).trim();
+      return lsOutput.length > 0;
+    } catch {
+      return false;
+    }
+  };
+
+  // Fresh attempt id every setup — never resume a prior failed run's branch.
+  let runAttemptSuffix = "";
+  let branchName = "";
+  for (let attempt = 0; attempt < 8; attempt++) {
+    runAttemptSuffix = generateRunAttemptSuffix();
+    branchName = computeBranchName(
+      workingDirectory,
+      uniqueId,
+      runAttemptSuffix,
+    );
+    if (currentBranch === branchName) {
+      console.log(c.dim(`  Already on branch: ${branchName}`));
+      return { branchName, prCreated: false };
+    }
+    if (!branchExistsLocal(branchName) && !branchExistsRemote(branchName)) {
+      break;
+    }
+    branchName = "";
   }
+  if (!branchName || !runAttemptSuffix) {
+    console.log(
+      c.red(
+        "  ✗ Could not allocate a unique run-attempt branch name after several tries.",
+      ),
+    );
+    return null;
+  }
+  console.log(c.dim(`  Run attempt: ${runAttemptSuffix}`));
 
   // Auto-stash dirty working tree
   let stashed = false;
@@ -1207,62 +1911,17 @@ export async function setupBranchAndPR(
   }
 
   try {
-    // Check if branch exists remotely
-    let branchExistsRemote = false;
-    try {
-      const lsOutput = execSync(
-        `git ls-remote --heads origin "${branchName}"`,
-        {
-          cwd: workingDirectory,
-          encoding: "utf-8",
-        },
-      ).trim();
-      branchExistsRemote = lsOutput.length > 0;
-    } catch {
-      branchExistsRemote = false;
-    }
-
-    // Check if branch exists locally
-    let branchExistsLocal = false;
-    try {
-      execSync(`git rev-parse --verify "${branchName}"`, {
-        cwd: workingDirectory,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      branchExistsLocal = true;
-    } catch {
-      branchExistsLocal = false;
-    }
-
-    if (branchExistsLocal) {
-      console.log(c.dim(`  Checking out existing local branch: ${branchName}`));
-      execSync(`git checkout "${branchName}"`, {
-        cwd: workingDirectory,
-        encoding: "utf-8",
-      });
-    } else if (branchExistsRemote) {
-      console.log(c.dim(`  Checking out remote branch: ${branchName}`));
-      execSync(`git checkout -b "${branchName}" "origin/${branchName}"`, {
-        cwd: workingDirectory,
-        encoding: "utf-8",
-      });
-    } else {
-      const baseBranch =
-        baseBranchOverride || getDefaultBranch(workingDirectory);
-      console.log(
-        c.dim(`  Creating branch: ${branchName} (from ${baseBranch})`),
-      );
-      execSync(`git checkout -b "${branchName}" "${baseBranch}"`, {
-        cwd: workingDirectory,
-        encoding: "utf-8",
-      });
-      console.log(c.dim("  Pushing branch to remote..."));
-      execSync(`git push -u origin "${branchName}"`, {
-        cwd: workingDirectory,
-        encoding: "utf-8",
-      });
-    }
+    const baseBranch = baseBranchOverride || getDefaultBranch(workingDirectory);
+    console.log(c.dim(`  Creating branch: ${branchName} (from ${baseBranch})`));
+    execSync(`git checkout -b "${branchName}" "${baseBranch}"`, {
+      cwd: workingDirectory,
+      encoding: "utf-8",
+    });
+    console.log(c.dim("  Pushing branch to remote..."));
+    execSync(`git push -u origin "${branchName}"`, {
+      cwd: workingDirectory,
+      encoding: "utf-8",
+    });
   } catch (error) {
     console.log(
       c.red(
@@ -1420,6 +2079,10 @@ export function formatMetricsMarkdown(metrics: Metrics): string {
     "|--------|-------|",
     `| Iterations | ${s.totalIterations} |`,
     `| Tasks Completed | ${s.tasksCompleted} |`,
+    `| Tokens In | ${(s.totalTokensIn ?? 0).toLocaleString()} |`,
+    `| Tokens Out | ${(s.totalTokensOut ?? 0).toLocaleString()} |`,
+    `| Diagnosis Tokens | ${(s.diagnosisTokens ?? 0).toLocaleString()} |`,
+    `| Codegen Tokens | ${(s.codegenTokens ?? 0).toLocaleString()} |`,
     `| Total Tokens | ${s.totalTokens.toLocaleString()} |`,
     `| Total Cost | ${costStr} |`,
     `| Duration | ${durationMin} min |`,
@@ -1428,6 +2091,19 @@ export function formatMetricsMarkdown(metrics: Metrics): string {
   if (s.ciQueriesTotal > 0) {
     lines.push(`| CI Queries | ${s.ciQueriesTotal} |`);
   }
+  if (s.pipelineRuns > 0) {
+    lines.push(`| Pipeline Runs | ${s.pipelineRuns} |`);
+  }
+  if (s.totalPipelineDurationMs > 0) {
+    lines.push(
+      `| Pipeline Minutes | ${(s.totalPipelineDurationMs / 60_000).toFixed(2)} |`,
+    );
+  }
+  if (s.totalEstimatedCredits !== null && s.totalEstimatedCredits > 0) {
+    lines.push(
+      `| Estimated CI Credits | ${s.totalEstimatedCredits.toFixed(1)} |`,
+    );
+  }
   if (s.ciFailuresEncountered > 0) {
     lines.push(`| CI Failures Encountered | ${s.ciFailuresEncountered} |`);
     lines.push(`| CI Failures Fixed | ${s.ciFailuresFixed} |`);
@@ -1435,6 +2111,24 @@ export function formatMetricsMarkdown(metrics: Metrics): string {
   if (s.timeToFirstCIGreen !== null) {
     const ciGreenMin = (s.timeToFirstCIGreen / 60_000).toFixed(1);
     lines.push(`| Time to First CI Green | ${ciGreenMin} min |`);
+  }
+  if (s.innerLoopMode) {
+    lines.push(`| Inner Loop Mode | ${s.innerLoopMode} |`);
+  }
+  if (s.ciPushesTotal > 0) {
+    lines.push(
+      `| CI Pushes (green/total) | ${s.ciPushesGreen}/${s.ciPushesTotal} |`,
+    );
+  }
+  if (s.everyCommitGreenRate !== null) {
+    lines.push(
+      `| Every-Commit Green Rate | ${(s.everyCommitGreenRate * 100).toFixed(1)}% |`,
+    );
+  }
+  if (s.firstPushGreen !== null) {
+    lines.push(
+      `| First Push Green (single-push) | ${s.firstPushGreen ? "yes" : "no"} |`,
+    );
   }
 
   lines.push("");
@@ -1566,7 +2260,11 @@ export async function loadGitConfig(
   const defaultConfig: GitConfig = {
     autoPush: true,
     pushOnLocalSuccess: true,
+    pushMode: "per-task",
   };
+
+  const normalizePushMode = (raw: unknown): GitPushMode =>
+    raw === "epilogue" ? "epilogue" : "per-task";
 
   try {
     const configPath = path.join(workingDirectory, "ralphci.json");
@@ -1579,6 +2277,9 @@ export async function loadGitConfig(
         autoPush: config.git.autoPush ?? defaultConfig.autoPush,
         pushOnLocalSuccess:
           config.git.pushOnLocalSuccess ?? defaultConfig.pushOnLocalSuccess,
+        pushMode: normalizePushMode(
+          config.git.pushMode ?? defaultConfig.pushMode,
+        ),
         baseBranch: config.git.baseBranch,
       };
     }
@@ -1589,6 +2290,9 @@ export async function loadGitConfig(
         autoPush: config.ci.autoPush ?? defaultConfig.autoPush,
         pushOnLocalSuccess:
           config.ci.pushOnLocalSuccess ?? defaultConfig.pushOnLocalSuccess,
+        pushMode: normalizePushMode(
+          config.ci.pushMode ?? defaultConfig.pushMode,
+        ),
       };
     }
 
@@ -1790,6 +2494,7 @@ function watchForSrcDir(
 export async function prefetchCIStatus(
   workingDirectory: string,
   verbose: boolean = false,
+  doctorConfig?: Pick<CIDoctorConfig, "logMode" | "maxLogLength">,
 ): Promise<InjectedCIStatus | null> {
   try {
     // Get git info
@@ -1837,12 +2542,40 @@ export async function prefetchCIStatus(
     // Fetch CI status (scoped to this branch only)
     const status = await fetchCIStatus(projectSlug, branch);
 
+    const logMode = doctorConfig?.logMode ?? "full";
     let failureLogs: string | null = null;
+    let failureContextChars = 0;
+    let failureContextSource: FailureContextSource = "none";
     if (status.status === "failed") {
-      failureLogs = await fetchAllFailureLogs(projectSlug, status);
+      const ctx = await fetchFailureContext(projectSlug, status, {
+        logMode,
+        maxLogLength: doctorConfig?.maxLogLength,
+      });
+      failureLogs = ctx.logs;
+      failureContextChars = ctx.failureContextChars;
+      failureContextSource = ctx.source;
+      if (verbose) {
+        console.log(
+          c.dim(
+            `  Failure context: ${failureContextChars} chars (${ctx.source})`,
+          ),
+        );
+      }
     }
 
-    return { status, failureLogs };
+    let pipelineUsage: PipelineUsage | null = null;
+    if (status.status === "failed" || status.status === "success") {
+      pipelineUsage = await fetchPipelineUsage(projectSlug, status);
+    }
+
+    return {
+      status,
+      failureLogs,
+      logMode,
+      failureContextChars,
+      failureContextSource,
+      pipelineUsage,
+    };
   } catch (error) {
     if (verbose) {
       console.log(
@@ -1864,6 +2597,7 @@ export async function pollPrefetchCIStatus(
   workingDirectory: string,
   maxWaitMs: number,
   verbose: boolean = false,
+  doctorConfig?: Pick<CIDoctorConfig, "logMode" | "maxLogLength">,
 ): Promise<InjectedCIStatus | null> {
   try {
     let gitRemoteURL = "";
@@ -1901,11 +2635,39 @@ export async function pollPrefetchCIStatus(
     );
 
     let failureLogs: string | null = null;
+    let failureContextChars = 0;
+    let failureContextSource: FailureContextSource = "none";
+    const logMode = doctorConfig?.logMode ?? "full";
     if (status.status === "failed") {
-      failureLogs = await fetchAllFailureLogs(projectSlug, status);
+      const ctx = await fetchFailureContext(projectSlug, status, {
+        logMode,
+        maxLogLength: doctorConfig?.maxLogLength,
+      });
+      failureLogs = ctx.logs;
+      failureContextChars = ctx.failureContextChars;
+      failureContextSource = ctx.source;
+      if (verbose) {
+        console.log(
+          c.dim(
+            `  Failure context: ${failureContextChars} chars (${ctx.source})`,
+          ),
+        );
+      }
     }
 
-    return { status, failureLogs };
+    let pipelineUsage: PipelineUsage | null = null;
+    if (status.status === "failed" || status.status === "success") {
+      pipelineUsage = await fetchPipelineUsage(projectSlug, status);
+    }
+
+    return {
+      status,
+      failureLogs,
+      logMode,
+      failureContextChars,
+      failureContextSource,
+      pipelineUsage,
+    };
   } catch {
     return null;
   }
@@ -1972,6 +2734,7 @@ export async function runCI(
   // Declare serverProcess and srcWatcher early so cleanup handlers can reference them
   let serverProcess: ChildProcess | null = null;
   let stopSrcWatcher: (() => void) | null = null;
+  let preventSleepHandle: PreventSleepHandle | null = null;
 
   // Setup cleanup handler for server and watcher
   const cleanupServer = () => {
@@ -1985,17 +2748,47 @@ export async function runCI(
     }
   };
 
+  const cleanupPreventSleep = () => {
+    if (preventSleepHandle) {
+      preventSleepHandle.stop();
+      preventSleepHandle = null;
+    }
+  };
+
+  const preventSleepFromConfig = await loadPreventSleepEnabled(
+    workingDirectory,
+    fs,
+  );
+  const preventSleepEnabled =
+    options.preventSleep !== undefined
+      ? options.preventSleep
+      : preventSleepFromConfig;
+
+  if (preventSleepEnabled) {
+    preventSleepHandle = startPreventSleep();
+    if (preventSleepHandle) {
+      console.log(
+        c.dim(
+          "  ☕ Preventing system sleep for this run (caffeinate -dims -w ralphci)",
+        ),
+      );
+    }
+  }
+
   // Register cleanup on process exit
   process.on("exit", () => {
+    cleanupPreventSleep();
     cleanupServer();
     killOrphanedTestProcesses();
   });
   process.on("SIGINT", () => {
+    cleanupPreventSleep();
     cleanupServer();
     killOrphanedTestProcesses();
     process.exit(130);
   });
   process.on("SIGTERM", () => {
+    cleanupPreventSleep();
     cleanupServer();
     killOrphanedTestProcesses();
     process.exit(143);
@@ -2003,6 +2796,7 @@ export async function runCI(
 
   // ─── Branch & PR Setup ───
   const uniqueId = await loadUniqueId(workingDirectory, fs);
+  const afkMode = await loadAfkMode(workingDirectory, fs);
   const draftPR = options.draftPR !== false; // default true
 
   // Capture the branch we started on so we can return to it on exit
@@ -2035,9 +2829,29 @@ export async function runCI(
       fs,
       resolvedBaseBranch,
     );
-    if (branchSetupResult) {
-      console.log(c.dim(`  Branch: ${branchSetupResult.branchName}`));
+    if (!branchSetupResult) {
+      console.log(
+        c.red(
+          "\n  ✗ Aborting: branch setup failed. Refusing to continue on the wrong branch (e.g. main).",
+        ),
+      );
+      console.log(
+        c.dim(
+          "  Tip: branches are experiment__{uniqueId}__{attemptHash} so re-runs never collide or nest under git.baseBranch.",
+        ),
+      );
+      process.exit(1);
+      return;
     }
+    console.log(c.dim(`  Branch: ${branchSetupResult.branchName}`));
+  }
+
+  if (afkMode) {
+    console.log(
+      c.dim(
+        "  AFK mode: on — needs-human will not pause the loop (unattended experiment).",
+      ),
+    );
   }
 
   // Load serve config and apply CLI overrides
@@ -2135,8 +2949,13 @@ export async function runCI(
 
   // Resolve specialized agent configs with backward-compatible defaults
   const buildAgentConfig = resolveBuildAgentConfig(config.buildAgent);
+  const preflightSurveyConfig = resolvePreflightSurveyConfig(
+    config.preflightSurvey,
+  );
   const reviewGateConfig = resolveReviewGateConfig(config.reviewGate);
   const ciDoctorConfig = resolveCIDoctorConfig(config.ciDoctor);
+  const packageRoot = resolvePackageRoot(workingDirectory);
+  const validationManifest = generateValidationManifest(packageRoot);
   // CI Doctor is only active when CI is enabled
   if (!ciConfig.enabled) {
     ciDoctorConfig.enabled = false;
@@ -2144,6 +2963,59 @@ export async function runCI(
 
   // Initialize CI query cache
   const ciCache = new CIQueryCache();
+
+  // Epilogue mode: defer remote push until all tasks pass Review Gate locally.
+  // Per-task mode starts unlocked so existing push-per-gate behavior is unchanged.
+  let epilogueUnlocked = resolveGitPushMode(gitConfig) !== "epilogue";
+  let epilogueRemotePushCount = 0;
+
+  console.log(c.cyan("\n  ─── Validation Manifest ───"));
+  console.log(
+    c.dim(
+      `  Inner: ${validationManifest.innerGates.join(", ")} · Outer: ${validationManifest.outerCiJobs.join(", ")}`,
+    ),
+  );
+  console.log(
+    c.dim(
+      `  Gate pointers: ${validationManifest.gatePointers.length} (read scripts on demand — see prompt)`,
+    ),
+  );
+
+  // Fail fast on a stale / dead Chunk sidecar before burning agent turns.
+  if (reviewGateConfig.enabled && reviewGateConfig.chunkSidecar.enabled) {
+    console.log(c.cyan("\n  ─── Chunk sidecar preflight ───"));
+    const health = probeActiveSidecarHealth(workingDirectory);
+    if (!health.ok) {
+      if (health.stale) {
+        console.log(
+          c.red(
+            "  ✗ Active Chunk sidecar is out of date (CLI newer than the VM agent).",
+          ),
+        );
+        console.log(
+          c.dim("  Recreate and select a fresh sidecar, then retry:"),
+        );
+        console.log(
+          c.dim(
+            "    chunk sidecar create --name <name> --org-id $CIRCLECI_ORG_ID",
+          ),
+        );
+        console.log(c.dim("    chunk sidecar use <id>"));
+        console.log(
+          c.dim(
+            "    chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub",
+          ),
+        );
+        console.log(c.dim("    ralphci check-chunk"));
+      } else {
+        console.log(c.red("  ✗ Chunk sidecar health probe failed."));
+      }
+      console.log(c.dim(`  Detail: ${health.detail.slice(0, 500)}`));
+      process.exit(1);
+      return;
+    }
+    console.log(c.green("  ✓ Sidecar exec probe ok (not stale)"));
+  }
 
   // Select runner if not provided
   if (!runner) {
@@ -2166,11 +3038,7 @@ export async function runCI(
       console.log(c.cyan("  ─── CI Configuration ───"));
       console.log(c.dim(`  Provider: ${ciConfig.provider}`));
       console.log(c.dim(`  Auto Push: ${gitConfig.autoPush}`));
-      console.log(
-        c.dim(
-          `  Push Strategy: ${gitConfig.pushOnLocalSuccess ? "on local success only (smart)" : "every commit (chatty)"}`,
-        ),
-      );
+      console.log(c.dim(`  Push Strategy: ${describePushStrategy(gitConfig)}`));
       console.log(
         c.dim(`  Require CI Green: ${ciConfig.requireGreenBeforeComplete}`),
       );
@@ -2194,11 +3062,17 @@ export async function runCI(
         `  Verbose Output: ${buildAgentConfig.verbose ? "enabled" : "disabled"}`,
       ),
     );
+    console.log(
+      c.dim(
+        `  Preflight Survey: ${preflightSurveyConfig.enabled ? "enabled" : "disabled"}`,
+      ),
+    );
 
     // Review Gate config
     console.log(c.cyan("  ─── Review Gate ───"));
     console.log(c.dim(`  Enabled: ${reviewGateConfig.enabled}`));
     if (reviewGateConfig.enabled) {
+      console.log(c.dim(`  Inner loop mode: ${reviewGateConfig.innerLoop}`));
       console.log(
         c.dim(
           `  Format Fix (Prettier): ${reviewGateConfig.formatFixEnabled ? "enabled" : "disabled"}`,
@@ -2220,10 +3094,19 @@ export async function runCI(
       const ch = reviewGateConfig.chunkSidecar;
       console.log(
         c.dim(
-          `  Chunk sidecar: ${ch.enabled ? "enabled (sync + validate --remote)" : "disabled"}`,
+          `  Chunk sidecar: ${
+            ch.enabled
+              ? `enabled (${ch.skipSync ? "validate --remote only" : `sync: ${ch.syncMode} + validate --remote`})`
+              : "disabled"
+          }`,
         ),
       );
       if (ch.enabled) {
+        const chunkWd = resolveChunkRemoteWorkdir(
+          workingDirectory,
+          ch.remoteWorkdir,
+        );
+        console.log(c.dim(`    remote workdir: ${chunkWd}`));
         console.log(
           c.dim(
             `    strict CLI: ${ch.strictCli ? "yes" : "no"} · skip sync: ${ch.skipSync ? "yes" : "no"}`,
@@ -2238,7 +3121,21 @@ export async function runCI(
       console.log(c.dim(`  Enabled: ${ciDoctorConfig.enabled}`));
       console.log(
         c.dim(
+          `  Log Mode: ${
+            ciDoctorConfig.logMode === "failure-report"
+              ? "failure-report (circleci run get --failure-report)"
+              : "full (unshaped job logs)"
+          }`,
+        ),
+      );
+      console.log(
+        c.dim(
           `  Max Log Length: ${ciDoctorConfig.maxLogLength === 0 ? "unlimited" : ciDoctorConfig.maxLogLength}`,
+        ),
+      );
+      console.log(
+        c.dim(
+          `  Max doctor runs / failure signature (until push): ${ciDoctorConfig.maxInvocationsPerFailureFingerprint}`,
         ),
       );
       if (ciDoctorConfig.model) {
@@ -2280,7 +3177,10 @@ export async function runCI(
     ...METRICS_TEMPLATE,
     startTime: new Date().toISOString(),
     iterations: [],
-    summary: { ...METRICS_TEMPLATE.summary },
+    summary: {
+      ...METRICS_TEMPLATE.summary,
+      innerLoopMode: reviewGateConfig.innerLoop,
+    },
   };
 
   // Initialize cumulative stats
@@ -2296,6 +3196,110 @@ export async function runCI(
   let actualModelReported = false;
   let lastKnownModel: string | undefined;
   let reviewGateFeedback: string | null = null;
+  let pendingChunkSidecarDoctorLogs: string | null = null;
+  let missingPromiseStreak: { index: number; count: number } | null = null;
+
+  function absorbReviewGateOutcome(gate: ReviewGateResult): void {
+    if (gate.passed) {
+      pendingChunkSidecarDoctorLogs = null;
+      return;
+    }
+    if (!reviewGateConfig.chunkSidecar.enabled) {
+      return;
+    }
+    if (!ciDoctorConfig.enabled) {
+      return;
+    }
+    const logs = buildChunkSidecarDoctorLogs(gate);
+    if (logs) {
+      pendingChunkSidecarDoctorLogs = logs;
+    }
+  }
+
+  async function preflightSurveyExists(): Promise<boolean> {
+    try {
+      const content = await fs.readFile(
+        path.join(workingDirectory, "preflight.md"),
+      );
+      return content.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  if (preflightSurveyConfig.enabled && !(await preflightSurveyExists())) {
+    if (!runner) {
+      throw new CommandError(
+        "Preflight Survey requires a runner but none was selected.",
+      );
+    }
+    console.log(c.cyan("\n  ─── Preflight Survey (before task 1) ───"));
+    const preflightPrompt = buildPreflightSurveyPrompt(
+      workingDirectory,
+      packageRoot,
+      validationManifest,
+      {
+        pushMode: resolveGitPushMode(gitConfig),
+        pushStrategyLabel: describePushStrategy(gitConfig),
+      },
+    );
+    printFullPrompt(preflightPrompt);
+    const preflightStarted = Date.now();
+    let preflightResponse;
+    try {
+      preflightResponse = await withSpinner(
+        "Running Preflight Survey…",
+        () =>
+          runner!.runClaude({
+            promptContent: preflightPrompt,
+            workingDirectory,
+            model: config.model,
+            timeoutMinutes: buildAgentConfig.timeoutMinutes,
+            verbose: buildAgentConfig.verbose,
+          }),
+        "Preflight Survey finished",
+      );
+    } catch (error) {
+      throw new CommandError(
+        `Preflight Survey failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    cumulative.totalInputTokens += preflightResponse.usage.input_tokens;
+    cumulative.totalOutputTokens += preflightResponse.usage.output_tokens;
+    cumulative.totalCacheReadTokens +=
+      preflightResponse.usage.cache_read_input_tokens;
+    cumulative.totalCost += preflightResponse.total_cost_usd;
+    if (preflightResponse.model) {
+      lastKnownModel = preflightResponse.model;
+    }
+    if (isPreflightCompleteSignal(preflightResponse.result)) {
+      console.log(c.green("  ✓ Preflight Survey signaled preflight-complete"));
+    } else {
+      console.log(
+        c.yellow(
+          "  ⚠️  Preflight Survey did not signal <promise>preflight-complete</promise>",
+        ),
+      );
+    }
+    if (await preflightSurveyExists()) {
+      console.log(c.green("  ✓ preflight.md written"));
+    } else {
+      console.log(
+        c.yellow(
+          "  ⚠️  preflight.md missing or empty — task loop will continue without it",
+        ),
+      );
+    }
+    console.log(
+      c.dim(
+        `  Preflight duration: ${((Date.now() - preflightStarted) / 1000).toFixed(1)}s`,
+      ),
+    );
+  } else if (preflightSurveyConfig.enabled) {
+    console.log(
+      c.dim("\n  Preflight Survey skipped (preflight.md already exists)"),
+    );
+  }
 
   // Run the loop
   for (let attempt = 1; attempt <= effectiveMaxIterations; attempt++) {
@@ -2305,6 +3309,7 @@ export async function runCI(
     killOrphanedTestProcesses();
 
     const iterationStart = Date.now();
+    const stepTimings: IterationStepTimings = {};
 
     // Safety-net server start: retry if the server should be running but isn't
     // (e.g. process crashed, or src/ existed at startup but startLocalServer failed).
@@ -2390,6 +3395,33 @@ export async function runCI(
 
     if (!selected) {
       // All tasks marked complete, but we need to verify everything is truly done
+
+      // Epilogue: unlock + one push now that the full game is locally green.
+      if (
+        resolveGitPushMode(gitConfig) === "epilogue" &&
+        !epilogueUnlocked &&
+        gitConfig.autoPush
+      ) {
+        epilogueUnlocked = true;
+        console.log(
+          c.green(
+            "\n  📤 Epilogue: all tasks complete locally — pushing once to trigger CI…",
+          ),
+        );
+        try {
+          gitPush(workingDirectory);
+          ciCache.recordPush();
+          console.log(c.green("  ✓ Epilogue push complete (CI will verify)"));
+          await tryCreatePR();
+        } catch (error) {
+          console.log(
+            c.yellow(
+              `  ⚠️  Epilogue push failed: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
+      }
+
       const hasChanges = hasUncommittedChanges(workingDirectory);
 
       if (hasChanges) {
@@ -2429,7 +3461,11 @@ export async function runCI(
         let injectedCI: InjectedCIStatus | null = null;
         if (ciConfig.enabled) {
           console.log(c.dim("  🔍 Fetching CI status..."));
-          injectedCI = await prefetchCIStatus(workingDirectory, verbose);
+          injectedCI = await prefetchCIStatus(
+            workingDirectory,
+            verbose,
+            ciDoctorConfig,
+          );
           if (injectedCI) {
             const statusText =
               injectedCI.status.status === "success"
@@ -2453,6 +3489,8 @@ export async function runCI(
             fs,
             injectedCI ?? undefined,
             gitConfig,
+            validationManifest,
+            { includeValidationManifest: false },
           );
         } catch (error) {
           throw new CommandError(
@@ -2490,7 +3528,10 @@ export async function runCI(
           );
 
           // Push any remaining changes before exiting
-          if (gitConfig.autoPush && hasUncommittedChanges(workingDirectory)) {
+          if (
+            shouldPushToRemote(gitConfig, epilogueUnlocked) &&
+            hasUncommittedChanges(workingDirectory)
+          ) {
             console.log(c.dim("  📤 Pushing final changes..."));
             gitCommitAndPush(
               workingDirectory,
@@ -2565,7 +3606,11 @@ export async function runCI(
         let injectedCIVerify: InjectedCIStatus | null = null;
         if (ciConfig.enabled) {
           console.log(c.dim("  🔍 Fetching CI status..."));
-          injectedCIVerify = await prefetchCIStatus(workingDirectory, verbose);
+          injectedCIVerify = await prefetchCIStatus(
+            workingDirectory,
+            verbose,
+            ciDoctorConfig,
+          );
           if (injectedCIVerify) {
             const statusText =
               injectedCIVerify.status.status === "success"
@@ -2589,6 +3634,8 @@ export async function runCI(
             fs,
             injectedCIVerify ?? undefined,
             gitConfig,
+            validationManifest,
+            { includeValidationManifest: false },
           );
         } catch (error) {
           throw new CommandError(
@@ -2622,13 +3669,18 @@ export async function runCI(
         // Only accept COMPLETE when our own re-fetch shows success — never trust agent when CI was RUNNING
         if (response.result.includes("<promise>COMPLETE</promise>")) {
           let actuallyGreen = false;
+          let recheck: InjectedCIStatus | null = null;
           if (ciConfig.enabled) {
             console.log(
               c.dim(
                 "  🔍 Re-fetching CI status before accepting completion...",
               ),
             );
-            const recheck = await prefetchCIStatus(workingDirectory, verbose);
+            recheck = await prefetchCIStatus(
+              workingDirectory,
+              verbose,
+              ciDoctorConfig,
+            );
             if (recheck?.status.status === "success") {
               actuallyGreen = true;
             } else if (recheck?.status.status === "running") {
@@ -2650,6 +3702,24 @@ export async function runCI(
 
           if (actuallyGreen) {
             console.log(c.green("\n  ✓ Agent confirms CI is green!"));
+
+            metrics.iterations.push(
+              buildIterationMetric({
+                iteration: attempt,
+                agentRole: "build",
+                ciStatusAtStart: recheck?.status.status ?? "success",
+                ciQueriesMade: 1,
+                taskWorkedOn: "Verify CI pipeline is green before completing",
+                ciFailureFixed: false,
+                outcome: "ci-verified-green",
+                costUsd: 0,
+                durationMs: 0,
+                injectedCI: recheck,
+                wallClockMs: 0,
+                logMode: ciDoctorConfig.logMode,
+              }),
+            );
+            maybeMarkFirstCIGreen(metrics, recheck);
 
             if (ciConfig.approvalGateEnabled) {
               console.log(
@@ -2683,7 +3753,10 @@ export async function runCI(
           console.log(
             c.yellow("  🔧 CI fix attempted, continuing to verify..."),
           );
-          if (gitConfig.autoPush && hasUncommittedChanges(workingDirectory)) {
+          if (
+            shouldPushToRemote(gitConfig, epilogueUnlocked) &&
+            hasUncommittedChanges(workingDirectory)
+          ) {
             console.log(c.dim("  📤 Pushing CI fix..."));
             const fixSummary = extractCommitSummary(response.result);
             const fixMsg = fixSummary
@@ -2752,58 +3825,74 @@ export async function runCI(
     let injectedCI: InjectedCIStatus | null = null;
     let ciQueried = false;
     if (ciConfig.enabled) {
-      const cached = ciCache.getCached();
-      if (cached) {
-        injectedCI = cached;
+      if (resolveGitPushMode(gitConfig) === "epilogue" && !epilogueUnlocked) {
         console.log(
-          c.dim("  🔍 CI: Using cached status (no push since last check)"),
+          c.dim(
+            "  🔍 CI: skipped (epilogue mode — no remote push until all tasks pass Review Gate)",
+          ),
         );
       } else {
-        console.log(c.dim("  🔍 Fetching CI status..."));
-        injectedCI = await prefetchCIStatus(workingDirectory, verbose);
-        if (injectedCI) {
-          ciCache.cacheResult(injectedCI);
-        }
-        ciQueried = true;
-      }
-
-      if (injectedCI) {
-        const { status: ciStatus } = injectedCI;
-        const branchLabel = ciStatus.branch
-          ? c.dim(` [branch: ${ciStatus.branch}]`)
-          : "";
-        if (ciStatus.status === "success") {
-          console.log(c.green("  ✅ CI: PASSING") + branchLabel);
-        } else if (ciStatus.status === "failed") {
+        const cached = ciCache.getCached();
+        if (cached) {
+          injectedCI = cached;
           console.log(
-            c.red("  ❌ CI: FAILED") +
-              branchLabel +
-              c.dim(` - ${ciStatus.message || "See logs below"}`),
-          );
-        } else if (ciStatus.status === "running") {
-          console.log(
-            c.cyan("  🔄 CI: RUNNING") +
-              branchLabel +
-              c.dim(` - ${ciStatus.message || "Pipeline in progress"}`),
-          );
-        } else if (ciStatus.status === "not_run") {
-          console.log(
-            c.dim(
-              `  ⏸️  CI: NOT RUN - No pipelines found for branch "${ciStatus.branch || "unknown"}"`,
-            ),
+            c.dim("  🔍 CI: Using cached status (no push since last check)"),
           );
         } else {
+          console.log(c.dim("  🔍 Fetching CI status..."));
+          const prefetchStarted = Date.now();
+          injectedCI = await prefetchCIStatus(
+            workingDirectory,
+            verbose,
+            ciDoctorConfig,
+          );
+          stepTimings.prefetchMs = Date.now() - prefetchStarted;
+          if (injectedCI) {
+            ciCache.cacheResult(injectedCI);
+          }
+          ciQueried = true;
+        }
+
+        maybeMarkFirstCIGreen(metrics, injectedCI);
+
+        if (injectedCI) {
+          const { status: ciStatus } = injectedCI;
+          const branchLabel = ciStatus.branch
+            ? c.dim(` [branch: ${ciStatus.branch}]`)
+            : "";
+          if (ciStatus.status === "success") {
+            console.log(c.green("  ✅ CI: PASSING") + branchLabel);
+          } else if (ciStatus.status === "failed") {
+            console.log(
+              c.red("  ❌ CI: FAILED") +
+                branchLabel +
+                c.dim(` - ${ciStatus.message || "See logs below"}`),
+            );
+          } else if (ciStatus.status === "running") {
+            console.log(
+              c.cyan("  🔄 CI: RUNNING") +
+                branchLabel +
+                c.dim(` - ${ciStatus.message || "Pipeline in progress"}`),
+            );
+          } else if (ciStatus.status === "not_run") {
+            console.log(
+              c.dim(
+                `  ⏸️  CI: NOT RUN - No pipelines found for branch "${ciStatus.branch || "unknown"}"`,
+              ),
+            );
+          } else {
+            console.log(
+              c.dim(`  ❓ CI: ${ciStatus.status}`) +
+                branchLabel +
+                (ciStatus.message ? c.dim(` - ${ciStatus.message}`) : ""),
+            );
+          }
+        } else {
           console.log(
-            c.dim(`  ❓ CI: ${ciStatus.status}`) +
-              branchLabel +
-              (ciStatus.message ? c.dim(` - ${ciStatus.message}`) : ""),
+            c.dim("  ⚠️  Could not fetch CI status (check CIRCLE_TOKEN)"),
           );
         }
-      } else {
-        console.log(
-          c.dim("  ⚠️  Could not fetch CI status (check CIRCLE_TOKEN)"),
-        );
-      }
+      } // end non-epilogue CI prefetch
     }
 
     const ciWasRunningAtStart = injectedCI?.status.status === "running";
@@ -2820,6 +3909,342 @@ export async function runCI(
     const ciIsFailing =
       ciHasFailure && !ciCache.isAlreadyFixed(failedPipelineNumber);
 
+    const runChunkSidecarCIDoctorIfNeeded = async (): Promise<
+      "continue" | "noop"
+    > => {
+      if (
+        !ciDoctorConfig.enabled ||
+        !reviewGateConfig.chunkSidecar.enabled ||
+        !pendingChunkSidecarDoctorLogs ||
+        ciIsFailing
+      ) {
+        return "noop";
+      }
+
+      const chunkLogs = pendingChunkSidecarDoctorLogs;
+      pendingChunkSidecarDoctorLogs = null;
+
+      const chunkDoctorCI = buildChunkSidecarDoctorInjection(
+        injectedCI,
+        workingDirectory,
+        chunkLogs,
+      );
+
+      const preDoctorSha = getHeadSha(workingDirectory);
+      try {
+        const doctorResponse = await runCIDoctor(
+          workingDirectory,
+          chunkDoctorCI,
+          runner!,
+          ciDoctorConfig.model || config.model,
+          {
+            banner: "\n  ─── CI Doctor (Chunk sidecar) ───",
+            innerLoop: reviewGateConfig.innerLoop,
+          },
+        );
+
+        absorbAgentCommits(workingDirectory, preDoctorSha);
+        cumulative.totalInputTokens += doctorResponse.usage.input_tokens;
+        cumulative.totalOutputTokens += doctorResponse.usage.output_tokens;
+        cumulative.totalCacheReadTokens +=
+          doctorResponse.usage.cache_read_input_tokens;
+        cumulative.totalCost += doctorResponse.total_cost_usd;
+
+        const doctorDuration = doctorResponse.duration_ms || 0;
+        const hasTokens =
+          doctorResponse.usage.input_tokens > 0 ||
+          doctorResponse.usage.output_tokens > 0;
+        if (hasTokens) {
+          console.log(
+            c.dim(
+              `  CI Doctor (Chunk) — Tokens In: ${doctorResponse.usage.input_tokens}  Out: ${doctorResponse.usage.output_tokens}`,
+            ),
+          );
+          console.log(
+            c.dim(
+              `  CI Doctor (Chunk) — Cost: $${doctorResponse.total_cost_usd.toFixed(4)}`,
+            ),
+          );
+        }
+
+        if (doctorResponse.model) {
+          lastKnownModel = doctorResponse.model;
+          if (!actualModelReported) {
+            console.log(c.cyan(`\n  Model: ${doctorResponse.model}`));
+            actualModelReported = true;
+          }
+        }
+
+        if (
+          doctorResponse.result.includes("<promise>ci-fix-attempted</promise>")
+        ) {
+          console.log(
+            c.green(
+              "  🏥 CI Doctor (Chunk) applied a fix — running Review Gate...",
+            ),
+          );
+
+          const doctorSummary = extractCommitSummary(doctorResponse.result);
+          const doctorSubject = buildCiDoctorCommitSubject(
+            "sidecar",
+            doctorSummary,
+          );
+          const doctorAgentDesc = extractCommitDescription(
+            doctorResponse.result,
+          );
+          const coAuthor = getCoAuthor(config, lastKnownModel);
+
+          if (reviewGateConfig.enabled) {
+            const gateResult = await runReviewGate(
+              workingDirectory,
+              reviewGateConfig,
+            );
+            absorbReviewGateOutcome(gateResult);
+
+            const commitBody = buildCiDoctorCommitBody(
+              "sidecar",
+              doctorAgentDesc,
+              { gatePassed: gateResult.passed },
+            );
+
+            const hadWork = hasUncommittedChanges(workingDirectory);
+            let commitOk = true;
+            if (hadWork) {
+              console.log(
+                c.dim(
+                  "  📝 Recording CI Doctor (Chunk) attempt as local commit...",
+                ),
+              );
+              commitOk = gitCommit(
+                workingDirectory,
+                doctorSubject,
+                coAuthor,
+                commitBody,
+              );
+              if (!commitOk) {
+                console.log(
+                  c.yellow(
+                    "  ⚠️  Could not create git commit for CI Doctor (Chunk) attempt",
+                  ),
+                );
+              }
+            }
+
+            if (gateResult.passed) {
+              reviewGateFeedback = null;
+
+              if (shouldPushToRemote(gitConfig, epilogueUnlocked)) {
+                if (hadWork && commitOk) {
+                  console.log(c.dim("  📤 Pushing to origin..."));
+                  gitPush(workingDirectory);
+                  ciCache.recordPush();
+                  pushedThisIteration = true;
+                  console.log(c.green("  ✓ Chunk sidecar fix pushed"));
+                  await tryCreatePR();
+                } else if (!hadWork) {
+                  console.log(
+                    c.dim(
+                      "  ℹ️  CI Doctor (Chunk) fix already applied locally — no new changes to push.",
+                    ),
+                  );
+                  ciCache.invalidate();
+                }
+              } else if (
+                resolveGitPushMode(gitConfig) === "epilogue" &&
+                !epilogueUnlocked &&
+                hadWork
+              ) {
+                console.log(
+                  c.dim(
+                    "  ⏸️  Epilogue mode: Chunk fix committed locally (push deferred).",
+                  ),
+                );
+              }
+            } else {
+              console.log(
+                c.yellow(
+                  "  ⚠️  CI Doctor (Chunk) fix did not pass Review Gate",
+                ),
+              );
+              reviewGateFeedback = buildReviewGateFeedback(gateResult);
+            }
+          } else if (gitConfig.autoPush) {
+            reviewGateFeedback = null;
+            const commitBody = buildCiDoctorCommitBody(
+              "sidecar",
+              doctorAgentDesc,
+              { gatePassed: true },
+            );
+            const hadWork = hasUncommittedChanges(workingDirectory);
+            let commitOk = true;
+            if (hadWork) {
+              console.log(
+                c.dim(
+                  "  📝 Recording CI Doctor (Chunk) attempt as local commit...",
+                ),
+              );
+              commitOk = gitCommit(
+                workingDirectory,
+                doctorSubject,
+                coAuthor,
+                commitBody,
+              );
+              if (!commitOk) {
+                console.log(
+                  c.yellow(
+                    "  ⚠️  Could not create git commit for CI Doctor (Chunk) attempt",
+                  ),
+                );
+              }
+            }
+
+            if (hadWork && commitOk) {
+              if (shouldPushToRemote(gitConfig, epilogueUnlocked)) {
+                console.log(c.dim("  📤 Pushing CI Doctor (Chunk) fix..."));
+                gitPush(workingDirectory);
+                ciCache.recordPush();
+                pushedThisIteration = true;
+                console.log(c.green("  ✓ Chunk sidecar fix pushed"));
+                await tryCreatePR();
+              } else {
+                console.log(
+                  c.dim(
+                    "  ⏸️  Epilogue mode: Chunk fix committed locally (push deferred).",
+                  ),
+                );
+              }
+            } else if (!hadWork) {
+              console.log(
+                c.dim(
+                  "  ℹ️  CI Doctor (Chunk) fix already applied locally — no new changes to push.",
+                ),
+              );
+              ciCache.invalidate();
+            }
+          }
+
+          metrics.iterations.push(
+            buildIterationMetric({
+              iteration: attempt,
+              agentRole: "ci-doctor",
+              ciStatusAtStart: injectedCI?.status.status || "unknown",
+              ciQueriesMade: ciQueried ? 1 : 0,
+              taskWorkedOn:
+                "[CI Doctor] Fix Chunk sidecar (validate --remote) failure",
+              ciFailureFixed: true,
+              outcome: "ci-fix-attempted",
+              costUsd: doctorResponse.total_cost_usd,
+              durationMs: doctorDuration,
+              usage: doctorResponse.usage,
+              injectedCI,
+              logMode: ciDoctorConfig.logMode,
+              wallClockMs: Date.now() - iterationStart,
+              stepTimings: {
+                ...stepTimings,
+                doctorMs: doctorDuration,
+              },
+            }),
+          );
+
+          if (attempt % 5 === 0) {
+            const currentTasks = await loadTasks(workingDirectory, fs);
+            updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
+            await saveMetrics(workingDirectory, metrics, fs);
+          }
+          return "continue";
+        }
+
+        if (doctorResponse.result.includes("<promise>needs-human</promise>")) {
+          if (afkMode) {
+            console.log(
+              c.yellow(
+                "\n  ⚠️  CI Doctor (Chunk) signaled needs-human — AFK mode ignores pause; continuing.",
+              ),
+            );
+            metrics.iterations.push(
+              buildIterationMetric({
+                iteration: attempt,
+                agentRole: "ci-doctor",
+                ciStatusAtStart: injectedCI?.status.status || "unknown",
+                ciQueriesMade: ciQueried ? 1 : 0,
+                taskWorkedOn:
+                  "[CI Doctor] Chunk sidecar — needs-human (AFK ignored)",
+                ciFailureFixed: false,
+                outcome: "needs-human-afk-ignored",
+                costUsd: doctorResponse.total_cost_usd,
+                durationMs: doctorDuration,
+                usage: doctorResponse.usage,
+                injectedCI,
+                wallClockMs: Date.now() - iterationStart,
+                stepTimings: {
+                  ...stepTimings,
+                  doctorMs: doctorDuration,
+                },
+              }),
+            );
+            reviewGateFeedback =
+              "AFK mode: human pause disabled. Keep diagnosing or recreate the sidecar (`chunk sidecar create` / `use` / `add-ssh-key`) and signal a fix tag — do not use needs-human.";
+            return "continue";
+          }
+          console.log(
+            c.yellow("\n  ⚠️  CI Doctor (Chunk) requests human assistance!"),
+          );
+          console.log(
+            c.dim(
+              "  The Chunk sidecar failure may require manual intervention (auth, sidecar host, or Chunk CLI).",
+            ),
+          );
+
+          metrics.iterations.push(
+            buildIterationMetric({
+              iteration: attempt,
+              agentRole: "ci-doctor",
+              ciStatusAtStart: injectedCI?.status.status || "unknown",
+              ciQueriesMade: ciQueried ? 1 : 0,
+              taskWorkedOn: "[CI Doctor] Chunk sidecar — needs human",
+              ciFailureFixed: false,
+              outcome: "needs-human",
+              costUsd: doctorResponse.total_cost_usd,
+              durationMs: doctorDuration,
+              usage: doctorResponse.usage,
+              injectedCI,
+              logMode: ciDoctorConfig.logMode,
+              wallClockMs: Date.now() - iterationStart,
+              stepTimings: {
+                ...stepTimings,
+                doctorMs: doctorDuration,
+              },
+            }),
+          );
+          metrics.endTime = new Date().toISOString();
+          const currentTasks = await loadTasks(workingDirectory, fs);
+          updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
+          await saveMetrics(workingDirectory, metrics, fs);
+          console.log(
+            c.dim(
+              `\n  Metrics saved to ${path.join(workingDirectory, "metrics.json")}`,
+            ),
+          );
+          console.log(
+            c.dim(
+              "\n  Loop paused. Address the Chunk sidecar issue and run again to continue.",
+            ),
+          );
+          process.exit(2);
+        }
+
+        return "noop";
+      } catch (error) {
+        console.log(
+          c.yellow(
+            `  ⚠️  CI Doctor (Chunk) error: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+        console.log(c.dim("  Falling through to Build Agent..."));
+        return "noop";
+      }
+    };
+
     if (ciHasFailure && ciCache.isAlreadyFixed(failedPipelineNumber)) {
       console.log(
         c.dim(
@@ -2828,13 +4253,46 @@ export async function runCI(
       );
     }
 
-    if (ciIsFailing && ciDoctorConfig.enabled) {
-      // Fetch full untruncated logs for CI Doctor
-      let doctorCI = injectedCI!;
-      if (ciDoctorConfig.maxLogLength !== 0 && doctorCI.failureLogs) {
-        // Re-fetch with unlimited logs if the cached version was truncated
-        // (shouldn't happen since default is now 0, but safety net)
-      }
+    const ciFailureFingerprint =
+      injectedCI && injectedCI.status.status === "failed"
+        ? computeCIFailureFingerprint(
+            injectedCI.failureLogs,
+            injectedCI.status.failedJobs,
+          )
+        : "";
+
+    let skipDoctorForFingerprint = false;
+    if (
+      ciIsFailing &&
+      ciDoctorConfig.enabled &&
+      ciFailureFingerprint &&
+      ciCache.shouldSkipDoctorForFingerprint(
+        ciFailureFingerprint,
+        ciDoctorConfig.maxInvocationsPerFailureFingerprint,
+      )
+    ) {
+      skipDoctorForFingerprint = true;
+      console.log(
+        c.dim(
+          `  🏥 CI Doctor skipped — same failure signature as a prior doctor run this push cycle (${ciDoctorConfig.maxInvocationsPerFailureFingerprint} max); Build Agent receives CI logs below.`,
+        ),
+      );
+      const notice = buildCIDoctorFingerprintSkipNotice(
+        ciFailureFingerprint.slice(0, 16),
+      );
+      reviewGateFeedback = reviewGateFeedback
+        ? `${notice}\n\n---\n\n${reviewGateFeedback}`
+        : notice;
+    }
+
+    if (ciIsFailing && ciDoctorConfig.enabled && !skipDoctorForFingerprint) {
+      const chunkForDoctor = pendingChunkSidecarDoctorLogs;
+      pendingChunkSidecarDoctorLogs = null;
+
+      const doctorCI: InjectedCIStatus = {
+        ...injectedCI!,
+        chunkSidecarFailureLogs: chunkForDoctor ?? undefined,
+      };
 
       // Run CI Doctor agent
       const preDoctorSha = getHeadSha(workingDirectory);
@@ -2844,7 +4302,12 @@ export async function runCI(
           doctorCI,
           runner!,
           ciDoctorConfig.model || config.model,
+          { innerLoop: reviewGateConfig.innerLoop },
         );
+
+        if (ciFailureFingerprint) {
+          ciCache.recordDoctorInvocationForFingerprint(ciFailureFingerprint);
+        }
 
         // Absorb any commits the agent made despite instructions
         absorbAgentCommits(workingDirectory, preDoctorSha);
@@ -2890,44 +4353,85 @@ export async function runCI(
           );
 
           const doctorSummary = extractCommitSummary(doctorResponse.result);
-          const doctorCommitMsg = doctorSummary
-            ? `fix(ci): ${doctorSummary}`
-            : "fix(ci): address pipeline failure";
-          const doctorDesc = extractCommitDescription(doctorResponse.result);
+          const doctorSubject = buildCiDoctorCommitSubject(
+            "pipeline",
+            doctorSummary,
+          );
+          const doctorAgentDesc = extractCommitDescription(
+            doctorResponse.result,
+          );
           const coAuthor = getCoAuthor(config, lastKnownModel);
+          const failedJobNames = injectedCI!.status.failedJobs?.map(
+            (j) => j.name,
+          );
 
           if (reviewGateConfig.enabled) {
             const gateResult = await runReviewGate(
               workingDirectory,
               reviewGateConfig,
             );
+            absorbReviewGateOutcome(gateResult);
+
+            const commitBody = buildCiDoctorCommitBody(
+              "pipeline",
+              doctorAgentDesc,
+              {
+                gatePassed: gateResult.passed,
+                failedJobNames,
+              },
+            );
+
+            const hadWork = hasUncommittedChanges(workingDirectory);
+            let commitOk = true;
+            if (hadWork) {
+              console.log(
+                c.dim("  📝 Recording CI Doctor attempt as local commit..."),
+              );
+              commitOk = gitCommit(
+                workingDirectory,
+                doctorSubject,
+                coAuthor,
+                commitBody,
+              );
+              if (!commitOk) {
+                console.log(
+                  c.yellow(
+                    "  ⚠️  Could not create git commit for CI Doctor attempt",
+                  ),
+                );
+              }
+            }
 
             if (gateResult.passed) {
               if (failedPipelineNumber)
                 ciCache.recordCIFix(failedPipelineNumber);
 
-              if (
-                gitConfig.autoPush &&
-                hasUncommittedChanges(workingDirectory)
+              if (shouldPushToRemote(gitConfig, epilogueUnlocked)) {
+                if (hadWork && commitOk) {
+                  console.log(c.dim("  📤 Pushing to origin..."));
+                  gitPush(workingDirectory);
+                  ciCache.recordPush();
+                  pushedThisIteration = true;
+                  console.log(c.green("  ✓ CI fix pushed"));
+                  await tryCreatePR();
+                } else if (!hadWork) {
+                  console.log(
+                    c.dim(
+                      "  ℹ️  CI Doctor fix already applied locally — no new changes to push. Re-checking CI status next iteration.",
+                    ),
+                  );
+                  ciCache.invalidate();
+                }
+              } else if (
+                resolveGitPushMode(gitConfig) === "epilogue" &&
+                !epilogueUnlocked &&
+                hadWork
               ) {
-                console.log(c.dim("  📤 Pushing CI Doctor fix..."));
-                gitCommitAndPush(
-                  workingDirectory,
-                  doctorCommitMsg,
-                  coAuthor,
-                  doctorDesc ?? undefined,
-                );
-                ciCache.recordPush();
-                pushedThisIteration = true;
-                console.log(c.green("  ✓ CI fix pushed"));
-                await tryCreatePR();
-              } else if (gitConfig.autoPush) {
                 console.log(
                   c.dim(
-                    "  ℹ️  CI Doctor fix already applied locally — no new changes to push. Re-checking CI status next iteration.",
+                    "  ⏸️  Epilogue mode: CI Doctor fix committed locally (push deferred).",
                   ),
                 );
-                ciCache.invalidate();
               }
             } else {
               // Review Gate failed on the CI Doctor's fix — feed back to Build Agent
@@ -2940,19 +4444,55 @@ export async function runCI(
             // Review Gate disabled — just push
             if (failedPipelineNumber) ciCache.recordCIFix(failedPipelineNumber);
 
-            if (gitConfig.autoPush && hasUncommittedChanges(workingDirectory)) {
-              console.log(c.dim("  📤 Pushing CI Doctor fix..."));
-              gitCommitAndPush(
-                workingDirectory,
-                doctorCommitMsg,
-                coAuthor,
-                doctorDesc ?? undefined,
+            const commitBody = buildCiDoctorCommitBody(
+              "pipeline",
+              doctorAgentDesc,
+              { gatePassed: true, failedJobNames },
+            );
+            const hadWork = hasUncommittedChanges(workingDirectory);
+            let commitOk = true;
+            if (hadWork) {
+              console.log(
+                c.dim("  📝 Recording CI Doctor attempt as local commit..."),
               );
+              commitOk = gitCommit(
+                workingDirectory,
+                doctorSubject,
+                coAuthor,
+                commitBody,
+              );
+              if (!commitOk) {
+                console.log(
+                  c.yellow(
+                    "  ⚠️  Could not create git commit for CI Doctor attempt",
+                  ),
+                );
+              }
+            }
+
+            if (
+              shouldPushToRemote(gitConfig, epilogueUnlocked) &&
+              hadWork &&
+              commitOk
+            ) {
+              console.log(c.dim("  📤 Pushing CI Doctor fix..."));
+              gitPush(workingDirectory);
               ciCache.recordPush();
               pushedThisIteration = true;
               console.log(c.green("  ✓ CI fix pushed"));
               await tryCreatePR();
-            } else if (gitConfig.autoPush) {
+            } else if (
+              resolveGitPushMode(gitConfig) === "epilogue" &&
+              !epilogueUnlocked &&
+              hadWork &&
+              commitOk
+            ) {
+              console.log(
+                c.dim(
+                  "  ⏸️  Epilogue mode: CI Doctor fix committed locally (push deferred).",
+                ),
+              );
+            } else if (gitConfig.autoPush && !hadWork) {
               console.log(
                 c.dim(
                   "  ℹ️  CI Doctor fix already applied locally — no new changes to push. Re-checking CI status next iteration.",
@@ -2962,22 +4502,27 @@ export async function runCI(
             }
           }
 
-          // Record CI Doctor iteration metric
-          const doctorMetric = {
-            iteration: attempt,
-            timestamp: new Date().toISOString(),
-            ciStatusAtStart: injectedCI?.status.status || "unknown",
-            ciQueriesMade: ciQueried ? 1 : 0,
-            taskWorkedOn: "[CI Doctor] Fix pipeline failure",
-            ciFailureFixed: true,
-            outcome: "ci-fix-attempted",
-            tokensUsed:
-              doctorResponse.usage.input_tokens +
-              doctorResponse.usage.output_tokens,
-            costUsd: doctorResponse.total_cost_usd,
-            durationMs: doctorDuration,
-          };
-          metrics.iterations.push(doctorMetric);
+          metrics.iterations.push(
+            buildIterationMetric({
+              iteration: attempt,
+              agentRole: "ci-doctor",
+              ciStatusAtStart: injectedCI?.status.status || "unknown",
+              ciQueriesMade: ciQueried ? 1 : 0,
+              taskWorkedOn: "[CI Doctor] Fix pipeline failure",
+              ciFailureFixed: true,
+              outcome: "ci-fix-attempted",
+              costUsd: doctorResponse.total_cost_usd,
+              durationMs: doctorDuration,
+              usage: doctorResponse.usage,
+              injectedCI,
+              logMode: ciDoctorConfig.logMode,
+              wallClockMs: Date.now() - iterationStart,
+              stepTimings: {
+                ...stepTimings,
+                doctorMs: doctorDuration,
+              },
+            }),
+          );
 
           // CI Doctor handled this iteration — continue to next
           if (attempt % 5 === 0) {
@@ -2989,6 +4534,37 @@ export async function runCI(
         }
 
         if (doctorResponse.result.includes("<promise>needs-human</promise>")) {
+          if (afkMode) {
+            console.log(
+              c.yellow(
+                "\n  ⚠️  CI Doctor signaled needs-human — AFK mode ignores pause; continuing.",
+              ),
+            );
+            metrics.iterations.push(
+              buildIterationMetric({
+                iteration: attempt,
+                agentRole: "ci-doctor",
+                ciStatusAtStart: injectedCI?.status.status || "unknown",
+                ciQueriesMade: ciQueried ? 1 : 0,
+                taskWorkedOn:
+                  "[CI Doctor] Diagnosis — needs-human (AFK ignored)",
+                ciFailureFixed: false,
+                outcome: "needs-human-afk-ignored",
+                costUsd: doctorResponse.total_cost_usd,
+                durationMs: doctorDuration,
+                usage: doctorResponse.usage,
+                injectedCI,
+                wallClockMs: Date.now() - iterationStart,
+                stepTimings: {
+                  ...stepTimings,
+                  doctorMs: doctorDuration,
+                },
+              }),
+            );
+            reviewGateFeedback =
+              "AFK mode: human pause disabled. Keep fixing the CI failure and signal <promise>ci-fix-attempted</promise> — do not use needs-human.";
+            continue;
+          }
           console.log(c.yellow("\n  ⚠️  CI Doctor requests human assistance!"));
           console.log(
             c.dim(
@@ -2996,21 +4572,27 @@ export async function runCI(
             ),
           );
 
-          const doctorMetric = {
-            iteration: attempt,
-            timestamp: new Date().toISOString(),
-            ciStatusAtStart: injectedCI?.status.status || "unknown",
-            ciQueriesMade: ciQueried ? 1 : 0,
-            taskWorkedOn: "[CI Doctor] Diagnosis — needs human",
-            ciFailureFixed: false,
-            outcome: "needs-human",
-            tokensUsed:
-              doctorResponse.usage.input_tokens +
-              doctorResponse.usage.output_tokens,
-            costUsd: doctorResponse.total_cost_usd,
-            durationMs: doctorDuration,
-          };
-          metrics.iterations.push(doctorMetric);
+          metrics.iterations.push(
+            buildIterationMetric({
+              iteration: attempt,
+              agentRole: "ci-doctor",
+              ciStatusAtStart: injectedCI?.status.status || "unknown",
+              ciQueriesMade: ciQueried ? 1 : 0,
+              taskWorkedOn: "[CI Doctor] Diagnosis — needs human",
+              ciFailureFixed: false,
+              outcome: "needs-human",
+              costUsd: doctorResponse.total_cost_usd,
+              durationMs: doctorDuration,
+              usage: doctorResponse.usage,
+              injectedCI,
+              logMode: ciDoctorConfig.logMode,
+              wallClockMs: Date.now() - iterationStart,
+              stepTimings: {
+                ...stepTimings,
+                doctorMs: doctorDuration,
+              },
+            }),
+          );
           metrics.endTime = new Date().toISOString();
           const currentTasks = await loadTasks(workingDirectory, fs);
           updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
@@ -3038,18 +4620,26 @@ export async function runCI(
       }
     }
 
+    const chunkDoctorLoopOutcome = await runChunkSidecarCIDoctorIfNeeded();
+    if (chunkDoctorLoopOutcome === "continue") {
+      continue;
+    }
+
     // ─── PHASE 3: Build Agent ───
     // Build prompt content — lighter now (no CI failure context)
     let promptContent: string;
     try {
-      // Don't inject CI failure context into Build Agent — CI Doctor handles that
+      // Don't inject CI failure context when CI Doctor just ran this iteration.
+      // When the doctor is skipped (unchanged failure signature), the Build Agent
+      // must see CI logs again.
       const alreadyFixedByDoctor = ciCache.isAlreadyFixed(failedPipelineNumber);
-      const buildAgentCI =
-        ciIsFailing && ciDoctorConfig.enabled
-          ? undefined // CI Doctor handled it this iteration
-          : alreadyFixedByDoctor && injectedCI
-            ? { status: injectedCI.status, failureLogs: null }
-            : (injectedCI ?? undefined);
+      const suppressCiFailureForBuildAgent =
+        ciIsFailing && ciDoctorConfig.enabled && !skipDoctorForFingerprint;
+      const buildAgentCI = suppressCiFailureForBuildAgent
+        ? undefined
+        : alreadyFixedByDoctor && injectedCI
+          ? { status: injectedCI.status, failureLogs: null }
+          : (injectedCI ?? undefined);
       promptContent = await buildPromptContent(
         workingDirectory,
         task,
@@ -3058,6 +4648,8 @@ export async function runCI(
         fs,
         buildAgentCI,
         gitConfig,
+        validationManifest,
+        { includeValidationManifest: index === 0 },
       );
     } catch (error) {
       throw new CommandError(
@@ -3129,6 +4721,13 @@ export async function runCI(
         console.log(c.cyan(`\n  Model: ${response.model}`));
         actualModelReported = true;
       }
+      if (response.model.toLowerCase().includes("synthetic")) {
+        console.log(
+          c.yellow(
+            "  ℹ️  Claude Code reported a synthetic model — runs are not backed by a full API session. Expect empty or non-tagged replies; use `claude` while signed in with a real model for RalphCI.",
+          ),
+        );
+      }
     }
 
     if (hasTokenStats) {
@@ -3146,9 +4745,9 @@ export async function runCI(
     }
 
     // Record iteration metrics
-    const iterationMetric = {
+    const iterationMetric = buildIterationMetric({
       iteration: attempt,
-      timestamp: new Date().toISOString(),
+      agentRole: "build",
       ciStatusAtStart: injectedCI?.status.status || "not-checked",
       ciQueriesMade: ciQueried ? 1 : 0,
       taskWorkedOn: task.description,
@@ -3156,10 +4755,20 @@ export async function runCI(
         "<promise>ci-fix-attempted</promise>",
       ),
       outcome: "unknown",
-      tokensUsed: attemptStats.inputTokens + attemptStats.outputTokens,
       costUsd: attemptStats.cost,
       durationMs: attemptStats.durationMs,
-    };
+      usage: {
+        input_tokens: attemptStats.inputTokens,
+        output_tokens: attemptStats.outputTokens,
+        cache_read_input_tokens: attemptStats.cacheReadTokens,
+      },
+      injectedCI,
+      wallClockMs: iterationDuration,
+      stepTimings: {
+        ...stepTimings,
+        buildAgentMs: response.duration_ms || iterationDuration,
+      },
+    });
 
     // ─── Fallback server start: if src/ appeared but the watcher missed it ───
     // The filesystem watcher (watchForSrcDir) is the primary detection mechanism
@@ -3197,6 +4806,10 @@ export async function runCI(
 
     // ─── PHASE 4: Signal Handling + Review Gate ───
 
+    if (hasOrchestratorCompletionTag(response.result)) {
+      missingPromiseStreak = null;
+    }
+
     if (response.result.includes("<promise>COMPLETE</promise>")) {
       console.log(
         c.green("\n  ✓ Build Agent signals ALL tasks complete and CI green!"),
@@ -3209,33 +4822,96 @@ export async function runCI(
       await saveTasks(workingDirectory, updatedTasks, fs);
 
       // Run Review Gate before final push
+      let finalizeGateOk = true;
       if (reviewGateConfig.enabled && hasUncommittedChanges(workingDirectory)) {
         const gateResult = await runReviewGate(
           workingDirectory,
           reviewGateConfig,
         );
+        absorbReviewGateOutcome(gateResult);
+        finalizeGateOk = gateResult.passed;
         if (!gateResult.passed) {
           console.log(
             c.yellow(
-              "  ⚠️  Review Gate failed on final push — continuing to next iteration",
+              "  ⚠️  Review Gate failed on finalize — recording local commit only; not pushing or exiting.",
             ),
           );
-          continue;
+          reviewGateFeedback = buildReviewGateFeedback(gateResult);
         }
       }
 
-      // Push any remaining changes
-      if (gitConfig.autoPush && hasUncommittedChanges(workingDirectory)) {
-        console.log(c.dim("  📤 Pushing final changes..."));
-        gitCommitAndPush(
+      const finalizeBody = !finalizeGateOk
+        ? "Review gate did not pass on finalize; push and completion deferred."
+        : undefined;
+
+      const hadFinalizeWorkBeforeCommit =
+        hasUncommittedChanges(workingDirectory);
+      let finalizeCommitted = false;
+      if (hadFinalizeWorkBeforeCommit) {
+        console.log(c.dim("  📝 Recording finalize as local commit..."));
+        finalizeCommitted = gitCommit(
           workingDirectory,
           "chore: finalize all tasks",
           getCoAuthor(config, lastKnownModel),
+          finalizeBody,
         );
+      }
+
+      if (!finalizeGateOk) {
+        continue;
+      }
+
+      // COMPLETE means the agent believes the full run is done — unlock epilogue.
+      if (resolveGitPushMode(gitConfig) === "epilogue") {
+        epilogueUnlocked = true;
+      }
+
+      if (
+        shouldPushToRemote(gitConfig, epilogueUnlocked) &&
+        (!hadFinalizeWorkBeforeCommit || finalizeCommitted)
+      ) {
+        console.log(c.dim("  📤 Pushing final changes..."));
+        gitPush(workingDirectory);
         ciCache.recordPush();
         pushedThisIteration = true;
         console.log(c.green("  ✓ Final changes pushed"));
         await tryCreatePR();
+      }
+
+      if (ciConfig.enabled && pushedThisIteration) {
+        console.log(
+          c.dim("  ⏳ Polling for CI result (after epilogue/final push)..."),
+        );
+        const pollStarted = Date.now();
+        const settled = await pollPrefetchCIStatus(
+          workingDirectory,
+          ciConfig.maxCIWaitSeconds * 1000,
+          verbose,
+          ciDoctorConfig,
+        );
+        const ciPollMs = Date.now() - pollStarted;
+        if (iterationMetric.stepTimings) {
+          iterationMetric.stepTimings.ciPollMs = ciPollMs;
+        }
+        if (settled) {
+          applyInjectedCIToIterationMetric(iterationMetric, settled);
+          iterationMetric.ciQueriesMade = Math.max(
+            iterationMetric.ciQueriesMade,
+            1,
+          );
+          ciCache.cacheResult(settled);
+          maybeMarkFirstCIGreen(metrics, settled);
+          if (pushedThisIteration) {
+            if (resolveGitPushMode(gitConfig) === "epilogue") {
+              epilogueRemotePushCount += 1;
+            }
+            recordCIPushOutcome(metrics, gitConfig, settled, {
+              isFirstEpiloguePush:
+                resolveGitPushMode(gitConfig) === "epilogue" &&
+                epilogueRemotePushCount === 1,
+            });
+          }
+        }
       }
 
       if (ciConfig.approvalGateEnabled) {
@@ -3279,23 +4955,27 @@ export async function runCI(
         );
       }
 
-      // ─── Review Gate before push ───
+      // ─── Review Gate: run whenever enabled; commit always documents iteration; push only if gate passes ───
       let gatePassedForPush = true;
-      if (
-        reviewGateConfig.enabled &&
-        gitConfig.autoPush &&
-        gitConfig.pushOnLocalSuccess
-      ) {
+      let gateRan = false;
+      if (reviewGateConfig.enabled) {
+        gateRan = true;
+        const gateStarted = Date.now();
         const gateResult = await runReviewGate(
           workingDirectory,
           reviewGateConfig,
         );
+        stepTimings.reviewGateMs = Date.now() - gateStarted;
+        if (iterationMetric.stepTimings) {
+          iterationMetric.stepTimings.reviewGateMs = stepTimings.reviewGateMs;
+        }
+        absorbReviewGateOutcome(gateResult);
         gatePassedForPush = gateResult.passed;
 
         if (!gateResult.passed) {
           console.log(
             c.yellow(
-              "  ⚠️  Review Gate failed — NOT pushing. Build Agent will fix next iteration.",
+              "  ⚠️  Review Gate failed — recording local commit only (no push). Build Agent will fix next iteration.",
             ),
           );
           // Capture the full Review Gate feedback so the Build Agent gets detailed
@@ -3305,37 +4985,101 @@ export async function runCI(
         }
       }
 
-      // Check if all tasks are now complete
-      const remainingTasks = updatedTasks.filter((t) => t.passes !== true);
-      const isLastTask =
-        remainingTasks.length === 0 && !ciConfig.requireGreenBeforeComplete;
+      const commitDesc = extractCommitDescription(response.result)?.trim();
+      const bodyParts: string[] = [];
+      if (commitDesc) {
+        bodyParts.push(commitDesc);
+      }
+      if (gateRan) {
+        bodyParts.push(
+          `Review gate: ${gatePassedForPush ? "passed" : "did not pass"} before this commit.`,
+        );
+      }
+      const featBody =
+        bodyParts.length > 0 ? bodyParts.join("\n\n") : undefined;
+      const featSubject = `feat: complete task ${index + 1} - ${task.description}`;
 
-      // Smart push: only push when Review Gate passes.
+      const hadWorkBeforeFeatCommit = hasUncommittedChanges(workingDirectory);
+      let featCommitted = false;
+      if (hadWorkBeforeFeatCommit) {
+        console.log(c.dim("  📝 Recording task completion as local commit..."));
+        featCommitted = gitCommit(
+          workingDirectory,
+          featSubject,
+          getCoAuthor(config, lastKnownModel),
+          featBody,
+        );
+        if (!featCommitted) {
+          console.log(
+            c.yellow(
+              "  ⚠️  Could not create local commit for this iteration (see git output above).",
+            ),
+          );
+        }
+      }
+
+      // Check remaining tasks before deciding push — epilogue unlocks on last gate-green task.
+      const remainingTasksAfterSuccess = updatedTasks.filter(
+        (t) => t.passes !== true,
+      );
+      const allTasksLocallyComplete = remainingTasksAfterSuccess.length === 0;
+      if (
+        allTasksLocallyComplete &&
+        gatePassedForPush &&
+        resolveGitPushMode(gitConfig) === "epilogue"
+      ) {
+        if (!epilogueUnlocked) {
+          console.log(
+            c.green(
+              "  📤 Epilogue: all tasks passed Review Gate — unlocking remote push…",
+            ),
+          );
+        }
+        epilogueUnlocked = true;
+      }
+
       if (
         gatePassedForPush &&
-        gitConfig.autoPush &&
+        shouldPushToRemote(gitConfig, epilogueUnlocked) &&
         gitConfig.pushOnLocalSuccess &&
-        hasUncommittedChanges(workingDirectory)
+        (!hadWorkBeforeFeatCommit || featCommitted)
       ) {
         console.log(
           c.green(
-            "  📤 Review Gate passed — pushing to trigger CI verification…",
+            resolveGitPushMode(gitConfig) === "epilogue"
+              ? "  📤 Epilogue push — triggering CI verification…"
+              : "  📤 Review Gate passed — pushing to trigger CI verification…",
           ),
         );
-        const commitDesc = extractCommitDescription(response.result);
-        gitCommitAndPush(
-          workingDirectory,
-          `feat: complete task ${index + 1} - ${task.description}`,
-          getCoAuthor(config, lastKnownModel),
-          commitDesc ?? undefined,
-        );
+        gitPush(workingDirectory);
         ciCache.recordPush();
         pushedThisIteration = true;
         console.log(c.green("  ✓ Changes pushed (CI will verify)"));
         await tryCreatePR();
+      } else if (
+        gatePassedForPush &&
+        resolveGitPushMode(gitConfig) === "epilogue" &&
+        !epilogueUnlocked
+      ) {
+        console.log(
+          c.dim(
+            "  ⏸️  Epilogue mode: local commit only (push deferred until all tasks pass Review Gate).",
+          ),
+        );
+      } else if (
+        !gatePassedForPush &&
+        gitConfig.autoPush &&
+        gitConfig.pushOnLocalSuccess
+      ) {
+        console.log(c.dim("  ⏸️  Not pushing (review gate did not pass)."));
       }
 
-      if (isLastTask) {
+      // Check if all tasks are now complete
+      const remainingTasks = remainingTasksAfterSuccess;
+      const isLastTask =
+        remainingTasks.length === 0 && !ciConfig.requireGreenBeforeComplete;
+
+      if (isLastTask && gatePassedForPush) {
         console.log(c.green("\n  ✓ All tasks completed!"));
 
         if (ciConfig.approvalGateEnabled) {
@@ -3369,80 +5113,223 @@ export async function runCI(
       console.log(c.yellow("  🔧 CI fix attempted by Build Agent"));
       iterationMetric.outcome = "ci-fix-attempted";
 
-      // Run Review Gate on the fix
+      // Run Review Gate on the fix; commit always documents iteration; push only if gate passes
       let gatePassedForCIFix = true;
+      let gateRanForCIFix = false;
       if (reviewGateConfig.enabled) {
+        gateRanForCIFix = true;
         const gateResult = await runReviewGate(
           workingDirectory,
           reviewGateConfig,
         );
+        absorbReviewGateOutcome(gateResult);
         gatePassedForCIFix = gateResult.passed;
+      }
+
+      const buildFixSummary = extractCommitSummary(response.result);
+      const buildFixMsg = buildFixSummary
+        ? `fix(ci): ${buildFixSummary}`
+        : `fix(ci): address failure for task ${index + 1} - ${task.description}`;
+      const buildFixDesc = extractCommitDescription(response.result)?.trim();
+      const ciFixBodyParts: string[] = [];
+      if (buildFixDesc) {
+        ciFixBodyParts.push(buildFixDesc);
+      }
+      if (gateRanForCIFix) {
+        ciFixBodyParts.push(
+          `Review gate: ${gatePassedForCIFix ? "passed" : "did not pass"} before this commit.`,
+        );
+      }
+      const buildFixBody =
+        ciFixBodyParts.length > 0 ? ciFixBodyParts.join("\n\n") : undefined;
+
+      const hadWorkBeforeCiFixCommit = hasUncommittedChanges(workingDirectory);
+      let ciFixCommitted = false;
+      if (hadWorkBeforeCiFixCommit) {
+        console.log(
+          c.dim("  📝 Recording Build Agent CI fix attempt as local commit..."),
+        );
+        ciFixCommitted = gitCommit(
+          workingDirectory,
+          buildFixMsg,
+          getCoAuthor(config, lastKnownModel),
+          buildFixBody,
+        );
+        if (!ciFixCommitted) {
+          console.log(
+            c.yellow(
+              "  ⚠️  Could not create local commit for CI fix (see git output above).",
+            ),
+          );
+        }
       }
 
       if (
         gatePassedForCIFix &&
-        gitConfig.autoPush &&
+        shouldPushToRemote(gitConfig, epilogueUnlocked) &&
         gitConfig.pushOnLocalSuccess &&
-        hasUncommittedChanges(workingDirectory)
+        (!hadWorkBeforeCiFixCommit || ciFixCommitted)
       ) {
         console.log(c.dim("  📤 Pushing CI fix for verification…"));
-        const buildFixSummary = extractCommitSummary(response.result);
-        const buildFixMsg = buildFixSummary
-          ? `fix(ci): ${buildFixSummary}`
-          : `fix(ci): address failure for task ${index + 1} - ${task.description}`;
-        const buildFixDesc = extractCommitDescription(response.result);
-        gitCommitAndPush(
-          workingDirectory,
-          buildFixMsg,
-          getCoAuthor(config, lastKnownModel),
-          buildFixDesc ?? undefined,
-        );
+        gitPush(workingDirectory);
         ciCache.recordPush();
         pushedThisIteration = true;
         console.log(c.green("  ✓ CI fix pushed"));
         await tryCreatePR();
+      } else if (
+        gatePassedForCIFix &&
+        resolveGitPushMode(gitConfig) === "epilogue" &&
+        !epilogueUnlocked
+      ) {
+        console.log(
+          c.dim(
+            "  ⏸️  Epilogue mode: CI fix committed locally (push deferred until all tasks pass).",
+          ),
+        );
+      } else if (
+        !gatePassedForCIFix &&
+        gitConfig.autoPush &&
+        gitConfig.pushOnLocalSuccess
+      ) {
+        console.log(c.dim("  ⏸️  Not pushing (review gate did not pass)."));
       }
     } else if (response.result.includes("<promise>needs-human</promise>")) {
-      console.log(c.yellow("\n  ⚠️  Build Agent requests human assistance!"));
-      console.log(c.dim("  Review activity.md for details on the issue."));
-      iterationMetric.outcome = "needs-human";
+      if (afkMode) {
+        console.log(
+          c.yellow(
+            "\n  ⚠️  Build Agent signaled needs-human — AFK mode ignores pause; continuing.",
+          ),
+        );
+        iterationMetric.outcome = "needs-human-afk-ignored";
+        reviewGateFeedback =
+          "AFK mode: this is an unattended run. Do not signal needs-human. Keep working the current task and end with <promise>success</promise> or <promise>ci-fix-attempted</promise>.";
+      } else {
+        console.log(c.yellow("\n  ⚠️  Build Agent requests human assistance!"));
+        console.log(c.dim("  Review activity.md for details on the issue."));
+        iterationMetric.outcome = "needs-human";
 
-      // Save metrics before pausing
-      metrics.iterations.push(iterationMetric);
-      metrics.endTime = new Date().toISOString();
-      const currentTasks = await loadTasks(workingDirectory, fs);
-      updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
-      await saveMetrics(workingDirectory, metrics, fs);
-      console.log(
-        c.dim(
-          `\n  Metrics saved to ${path.join(workingDirectory, "metrics.json")}`,
-        ),
-      );
+        // Save metrics before pausing
+        metrics.iterations.push(iterationMetric);
+        metrics.endTime = new Date().toISOString();
+        const currentTasks = await loadTasks(workingDirectory, fs);
+        updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
+        await saveMetrics(workingDirectory, metrics, fs);
+        console.log(
+          c.dim(
+            `\n  Metrics saved to ${path.join(workingDirectory, "metrics.json")}`,
+          ),
+        );
 
-      console.log(
-        c.dim("\n  Loop paused. Address the issue and run again to continue."),
-      );
-      process.exit(2);
-      return;
+        console.log(
+          c.dim(
+            "\n  Loop paused. Address the issue and run again to continue.",
+          ),
+        );
+        process.exit(2);
+        return;
+      }
     } else {
       console.log(
         c.dim(`  ⟳ Task ${index + 1} in progress (iterating locally, no push)`),
       );
       iterationMetric.outcome = "in-progress";
+
+      if (!hasOrchestratorCompletionTag(response.result)) {
+        if (
+          missingPromiseStreak !== null &&
+          missingPromiseStreak.index === index
+        ) {
+          missingPromiseStreak.count++;
+        } else {
+          missingPromiseStreak = { index, count: 1 };
+        }
+
+        if (missingPromiseStreak.count >= MISSING_PROMISE_TAG_STREAK_EXIT) {
+          iterationMetric.outcome = "missing-promise-streak";
+          metrics.iterations.push(iterationMetric);
+          metrics.endTime = new Date().toISOString();
+          const currentTasks = await loadTasks(workingDirectory, fs);
+          updateMetricsSummary(metrics, cumulative, attempt, currentTasks);
+          await saveMetrics(workingDirectory, metrics, fs);
+          console.log(
+            c.red(
+              `\n  ✗ Stopping: ${missingPromiseStreak.count} consecutive Build Agent responses without a recognized <promise> tag on task ${index + 1}.`,
+            ),
+          );
+          console.log(
+            c.dim(
+              "  Fix the agent prompt or runner output, then re-run. See metrics.json for this iteration.",
+            ),
+          );
+          process.exit(1);
+        }
+
+        const tagReminder = buildMissingPromiseTagReminder(
+          index + 1,
+          missingPromiseStreak.count,
+          { afk: afkMode },
+        );
+        reviewGateFeedback = reviewGateFeedback
+          ? `${tagReminder}\n\n---\n\n${reviewGateFeedback}`
+          : tagReminder;
+
+        if (
+          missingPromiseStreak.count === 3 ||
+          missingPromiseStreak.count === 6 ||
+          missingPromiseStreak.count === 9
+        ) {
+          console.log(
+            c.yellow(
+              `  ⚠️  No <promise> tag (${missingPromiseStreak.count}× on task ${index + 1}) — reminder injected; ${MISSING_PROMISE_TAG_STREAK_EXIT - missingPromiseStreak.count} more and the loop exits.`,
+            ),
+          );
+        }
+      }
     }
 
-    // ─── Post-iteration: resolve "running" pipeline if no push happened ───
-    if (ciConfig.enabled && ciWasRunningAtStart && !pushedThisIteration) {
-      console.log(
-        c.dim("  ⏳ CI was running at iteration start — polling for result..."),
-      );
+    // ─── Post-iteration: poll after push or when CI was already running ───
+    if (
+      shouldPollCIAfterIteration({
+        ciEnabled: ciConfig.enabled,
+        pushedThisIteration,
+        ciWasRunningAtStart,
+      })
+    ) {
+      const pollReason = pushedThisIteration
+        ? "after push"
+        : "CI was running at iteration start";
+      console.log(c.dim(`  ⏳ Polling for CI result (${pollReason})...`));
+      const pollStarted = Date.now();
       const settled = await pollPrefetchCIStatus(
         workingDirectory,
         ciConfig.maxCIWaitSeconds * 1000,
         verbose,
+        ciDoctorConfig,
       );
+      stepTimings.ciPollMs = Date.now() - pollStarted;
+      if (iterationMetric.stepTimings) {
+        iterationMetric.stepTimings.ciPollMs = stepTimings.ciPollMs;
+      }
       if (settled) {
+        applyInjectedCIToIterationMetric(iterationMetric, settled);
+        if (pushedThisIteration) {
+          iterationMetric.ciQueriesMade = Math.max(
+            iterationMetric.ciQueriesMade,
+            1,
+          );
+        }
         ciCache.cacheResult(settled);
+        maybeMarkFirstCIGreen(metrics, settled);
+        if (pushedThisIteration) {
+          if (resolveGitPushMode(gitConfig) === "epilogue") {
+            epilogueRemotePushCount += 1;
+          }
+          recordCIPushOutcome(metrics, gitConfig, settled, {
+            isFirstEpiloguePush:
+              resolveGitPushMode(gitConfig) === "epilogue" &&
+              epilogueRemotePushCount === 1,
+          });
+        }
         if (settled.status.status === "success") {
           console.log(c.green("  ✅ CI pipeline settled: PASSING"));
         } else if (settled.status.status === "failed") {

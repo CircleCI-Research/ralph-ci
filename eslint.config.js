@@ -15,6 +15,7 @@ export default [
       globals: {
         console: "readonly",
         process: "readonly",
+        fetch: "readonly",
       },
     },
     plugins: {
@@ -56,6 +57,13 @@ export default [
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "*.js", "experiments/**/no-ci-*/**"],
+    ignores: [
+      "dist/",
+      "node_modules/",
+      "*.js",
+      "experiments/no-ci_vs_ci/**",
+      // macOS AppleDouble (resource fork) files — not parseable as TS/JS
+      "**/._*",
+    ],
   },
 ];
