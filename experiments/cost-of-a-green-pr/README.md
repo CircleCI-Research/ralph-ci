@@ -2,7 +2,7 @@
 
 Classic Snake builds that compare how often an agent loop pushes to CircleCI. Same seven-task game. The later runs use a sidecar inner loop and a preflight pass before task 1.
 
-Background: [What snake games have taught us about shipping with AI agents](https://www.confidentcommit.com/p/what-snake-games-have-taught-us-about).
+Background: [Pencils down: The cost of a green PR](https://www.confidentcommit.com/p/cost-of-a-green-pr).
 
 ## Play
 
