@@ -2,7 +2,7 @@
 
 Five Classic Snake builds from the early-May study: local checks, a Chunk sidecar Review Gate, then CircleCI. Each iteration is a playable game.
 
-Background: [What snake games have taught us about shipping with AI agents](https://www.confidentcommit.com/p/what-snake-games-have-taught-us-about).
+Background: [AFK builds with 100% green PRs](https://www.confidentcommit.com/p/afk-builds-with-100-green-prs-chunk).
 
 Open a game from `iteration-1` through `iteration-5`:
 
