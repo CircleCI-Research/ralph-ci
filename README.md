@@ -33,11 +33,11 @@ The name comes from the "Ralph Loop" concept ([Ralph Wiggum](https://ghuntley.co
 
 The benchmark is the same seven-task Classic Snake game. Each run has a playable `src/index.html` plus `metrics.json` and `activity.md`.
 
-| Study                     | Games                                                                                             | Read                                                                                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| February, CI vs no CI     | 10 runs in [`experiments/no-ci_vs_ci/claude-default/`](experiments/no-ci_vs_ci/claude-default/)   | [_We Let an AI Agent Say 'I Passed.' Was It Actually Good?_](https://www.confidentcommit.com/p/we-let-an-ai-agent-say-i-passed-was)                          |
-| Early May, Chunk sidecars | 5 runs in [`experiments/w_chunk-sidecars/`](experiments/w_chunk-sidecars/)                        | [README](experiments/w_chunk-sidecars/README.md) · [_AFK builds with 100% green PRs_](https://www.confidentcommit.com/p/afk-builds-with-100-green-prs-chunk) |
-| Cost of a Green PR        | One finished game per arm in [`experiments/cost-of-a-green-pr/`](experiments/cost-of-a-green-pr/) | [README](experiments/cost-of-a-green-pr/README.md) · [_Pencils down: The cost of a green PR_](https://www.confidentcommit.com/p/cost-of-a-green-pr)          |
+| Study                     | Games                                                                                             | Read                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| February, CI vs no CI     | 10 runs in [`experiments/no-ci_vs_ci/claude-default/`](experiments/no-ci_vs_ci/claude-default/)   | [_We Let an AI Agent Say 'I Passed.' Was It Actually Good?_](https://www.confidentcommit.com/p/we-let-an-ai-agent-say-i-passed-was) |
+| Early May, Chunk sidecars | 5 runs in [`experiments/w_chunk-sidecars/`](experiments/w_chunk-sidecars/)                        | [_AFK builds with 100% green PRs_](https://www.confidentcommit.com/p/afk-builds-with-100-green-prs-chunk)                           |
+| Cost of a Green PR        | One finished game per arm in [`experiments/cost-of-a-green-pr/`](experiments/cost-of-a-green-pr/) | [_Pencils down: The cost of a green PR_](https://www.confidentcommit.com/p/cost-of-a-green-pr)                                      |
 
 Serve a game's `src/` directory and open the URL the server prints:
 
